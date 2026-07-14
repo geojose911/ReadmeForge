@@ -3,199 +3,340 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ReadmeForge — GitHub README Generator</title>
-  <meta name="description" content="Instantly generate a beautiful README.md for any public GitHub repository. Just paste the repo URL and get a professional README in seconds." />
+  <title>ReadmeForge — AI-Powered GitHub README Generator</title>
+  <meta name="description" content="Paste any public GitHub repository URL and ReadmeForge uses Gemini AI to analyze the codebase and generate a professional, comprehensive README.md in seconds." />
+  <meta name="keywords" content="readme generator, github readme, ai readme, markdown generator, developer tools, gemini ai" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="ReadmeForge — AI-Powered README Generator" />
+  <meta property="og:description" content="Generate professional README files for any public GitHub repository using Gemini AI." />
+  <meta property="og:type" content="website" />
+
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <!-- Background particles -->
-  <div class="bg-orbs">
-    <div class="orb orb1"></div>
-    <div class="orb orb2"></div>
-    <div class="orb orb3"></div>
-  </div>
-
-  <!-- Header -->
+  <!-- ── Header ── -->
   <header class="header">
     <div class="logo">
-      <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect width="32" height="32" rx="8" fill="url(#logoGrad)"/>
-        <path d="M8 10h16M8 16h10M8 22h13" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-        <circle cx="24" cy="22" r="3" fill="white" opacity="0.9"/>
-        <defs>
-          <linearGradient id="logoGrad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#7C3AED"/>
-            <stop offset="1" stop-color="#3B82F6"/>
-          </linearGradient>
-        </defs>
-      </svg>
+      <div class="logo-mark">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M2 3h10M2 7h7M2 11h8"/>
+        </svg>
+      </div>
       <span class="logo-text">ReadmeForge</span>
+      <span class="logo-version">v4.0</span>
     </div>
-    <nav class="nav-links">
-      <a href="#how-it-works" class="nav-link">How it works</a>
-      <a href="https://github.com" target="_blank" class="nav-btn">GitHub ↗</a>
-    </nav>
+
+    <div class="header-right">
+      <nav class="nav-links">
+        <a href="#how-it-works" class="nav-link">How it works</a>
+      </nav>
+      <div class="header-divider"></div>
+
+      <!-- Gemini API Key settings -->
+      <button id="settingsBtn" class="icon-btn" onclick="toggleSettings()" title="Configure Gemini API key" aria-label="Settings" aria-expanded="false">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+
+      <!-- GitHub link -->
+      <a href="https://github.com/geojose911/ReadmeForge" target="_blank" rel="noopener" class="icon-btn" title="View source on GitHub" aria-label="View source on GitHub">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
+        </svg>
+      </a>
+    </div>
   </header>
 
-  <!-- Hero Section -->
-  <section class="hero">
-    <div class="hero-badge">✨ No API key required</div>
-    <h1 class="hero-title">Generate a perfect<br /><span class="gradient-text">README</span> in seconds</h1>
-    <p class="hero-subtitle">Paste any public GitHub repository URL and ReadmeForge will analyze the codebase, detect technologies, and craft a professional README.md for you.</p>
+  <!-- ── API Key Settings Panel ── -->
+  <div id="settingsPanel" class="settings-panel hidden" role="dialog" aria-modal="true" aria-label="API Key Settings">
+    <div class="settings-panel-header">
+      <span class="settings-panel-title">Gemini API Key</span>
+      <button class="settings-close" onclick="toggleSettings()" aria-label="Close settings">✕</button>
+    </div>
+    <p class="settings-desc">
+      ReadmeForge uses <strong>Google Gemini Flash</strong> to intelligently analyze your repository and write a professional README.<br><br>
+      Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com</a> — no billing required.
+      Your key is stored only in your browser's localStorage and never sent to any server.
+    </p>
+    <label class="settings-field-label" for="apiKeyInput">API Key</label>
+    <div class="settings-input-row">
+      <input
+        type="password"
+        id="apiKeyInput"
+        class="api-key-input"
+        placeholder="AIza..."
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="Gemini API Key"
+      />
+      <button class="save-key-btn" onclick="saveApiKey()" aria-label="Save API Key">Save</button>
+    </div>
+    <div id="keyStatus" class="settings-status">No key configured — will use template mode</div>
+  </div>
 
-    <!-- Input Card -->
-    <div class="input-card" id="inputCard">
-      <div class="input-group">
-        <div class="input-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!-- ── Main Hero ── -->
+  <main class="main-wrapper">
+    <section class="hero animate-in">
+      <div class="hero-eyebrow">
+        <span class="eyebrow-dot"></span>
+        GitHub API + Gemini AI
+      </div>
+      <h1 class="hero-title">
+        Generate a perfect<br>
+        <em>README.md</em> instantly
+      </h1>
+      <p class="hero-subtitle">
+        Paste any public GitHub repo URL. ReadmeForge analyses the codebase, detects the tech stack, and writes a comprehensive, professional README in seconds.
+      </p>
+    </section>
+
+    <!-- ── Input Block ── -->
+    <div id="inputBlock" class="animate-in" style="animation-delay:0.07s">
+      <div class="input-block">
+        <div class="input-label">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
           </svg>
+          Repository URL
         </div>
-        <input
-          type="url"
-          id="repoUrl"
-          class="repo-input"
-          placeholder="https://github.com/username/repository"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <button id="generateBtn" class="generate-btn" onclick="handleGenerate()">
-          <span class="btn-text">Generate README</span>
-          <svg class="btn-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-            <polyline points="12 5 19 12 12 19"></polyline>
-          </svg>
-        </button>
+        <div class="input-row">
+          <input
+            type="url"
+            id="repoUrl"
+            class="repo-input"
+            placeholder="https://github.com/username/repository"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="GitHub repository URL"
+          />
+          <button id="generateBtn" class="generate-btn" onclick="handleGenerate()" aria-label="Generate README">
+            <span class="btn-spinner" aria-hidden="true"></span>
+            <span class="btn-label">Generate README</span>
+          </button>
+        </div>
+        <div class="input-hint">
+          Works with any <strong style="color:var(--text-secondary)">public</strong> GitHub repository
+          &nbsp;&middot;&nbsp;
+          Press <kbd>Enter</kbd> to generate
+          &nbsp;&middot;&nbsp;
+          <span class="ai-badge" id="aiBadge">
+            <span class="ai-badge-dot"></span>
+            AI Mode
+          </span>
+        </div>
       </div>
-      <p class="input-hint">Works with any <strong>public</strong> GitHub repository</p>
-    </div>
 
-    <!-- Example repos -->
-    <div class="examples">
-      <span class="examples-label">Try an example:</span>
-      <button class="example-tag" onclick="setExample('https://github.com/facebook/react')">facebook/react</button>
-      <button class="example-tag" onclick="setExample('https://github.com/tiangolo/fastapi')">tiangolo/fastapi</button>
-      <button class="example-tag" onclick="setExample('https://github.com/axios/axios')">axios/axios</button>
-    </div>
-  </section>
+      <!-- Example repos -->
+      <div class="examples">
+        <span class="examples-label">Try an example:</span>
+        <button class="example-tag" onclick="setExample('https://github.com/facebook/react')">facebook/react</button>
+        <button class="example-tag" onclick="setExample('https://github.com/tiangolo/fastapi')">tiangolo/fastapi</button>
+        <button class="example-tag" onclick="setExample('https://github.com/cli/cli')">cli/cli</button>
+        <button class="example-tag" onclick="setExample('https://github.com/axios/axios')">axios/axios</button>
+        <button class="example-tag" onclick="setExample('https://github.com/geojose911/ReadmeForge')">ReadmeForge</button>
+      </div>
 
-  <!-- Loading State -->
-  <div id="loadingState" class="loading-state hidden">
+      <!-- Info strip -->
+      <div class="info-strip animate-in" style="animation-delay:0.14s">
+        <div class="info-item">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          No login required
+        </div>
+        <div class="info-sep"></div>
+        <div class="info-item">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          100% client-side
+        </div>
+        <div class="info-sep"></div>
+        <div class="info-item">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          GitHub Public API
+        </div>
+        <div class="info-sep"></div>
+        <div class="info-item">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span id="modeIndicator">Template mode (no API key)</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Loading State ── -->
+  <div id="loadingState" class="loading-state hidden" aria-live="polite">
     <div class="loading-card">
-      <div class="loading-spinner"></div>
-      <div class="loading-content">
-        <h3 class="loading-title">Analyzing Repository...</h3>
-        <p id="loadingStep" class="loading-step">Fetching repository metadata</p>
+      <div class="loading-header">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div>
+          <div class="loading-title">Analysing Repository…</div>
+          <div id="loadingStep" class="loading-step">Fetching repository metadata</div>
+        </div>
       </div>
-      <div class="loading-steps">
-        <div class="step-item" id="step1">
-          <div class="step-dot active"></div>
+      <div class="loading-progress">
+        <div class="loading-bar" id="loadingBar"></div>
+      </div>
+      <div class="loading-steps" role="list">
+        <div class="step-item" id="step1" role="listitem">
+          <div class="step-dot active" aria-hidden="true"></div>
           <span>Fetching repository info</span>
         </div>
-        <div class="step-item" id="step2">
-          <div class="step-dot"></div>
+        <div class="step-item" id="step2" role="listitem">
+          <div class="step-dot" aria-hidden="true"></div>
           <span>Scanning file structure</span>
         </div>
-        <div class="step-item" id="step3">
-          <div class="step-dot"></div>
-          <span>Reading key files</span>
+        <div class="step-item" id="step3" role="listitem">
+          <div class="step-dot" aria-hidden="true"></div>
+          <span>Reading key config files</span>
         </div>
-        <div class="step-item" id="step4">
-          <div class="step-dot"></div>
-          <span>Generating README</span>
+        <div class="step-item" id="step4" role="listitem">
+          <div class="step-dot" aria-hidden="true"></div>
+          <span>Generating README with AI</span>
+        </div>
+        <div class="step-item" id="step5" role="listitem">
+          <div class="step-dot" aria-hidden="true"></div>
+          <span>Finalising output</span>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Error State -->
-  <div id="errorState" class="error-state hidden">
+  <!-- ── Error State ── -->
+  <div id="errorState" class="error-state hidden" role="alert">
     <div class="error-card">
-      <div class="error-icon">⚠️</div>
-      <h3 class="error-title">Something went wrong</h3>
+      <div class="error-header">
+        <div class="error-icon-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </div>
+        <h3 class="error-title">Something went wrong</h3>
+      </div>
       <p id="errorMessage" class="error-message"></p>
-      <button class="retry-btn" onclick="resetUI()">Try Again</button>
+      <button class="retry-btn" onclick="resetUI()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.87"/></svg>
+        Try Again
+      </button>
     </div>
   </div>
 
-  <!-- Result Section -->
-  <section id="resultSection" class="result-section hidden">
+  <!-- ── Result Section ── -->
+  <section id="resultSection" class="result-section hidden" aria-label="Generated README">
     <!-- Repo Stats Bar -->
     <div class="repo-stats-bar" id="repoStatsBar"></div>
 
-    <!-- Tabs -->
+    <!-- Tabs + Actions -->
     <div class="tabs-container">
-      <div class="tabs">
-        <button class="tab active" id="previewTab" onclick="switchTab('preview')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      <div class="tabs" role="tablist">
+        <button class="tab active" id="previewTab" role="tab" aria-selected="true" aria-controls="previewPane" onclick="switchTab('preview')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           Preview
         </button>
-        <button class="tab" id="rawTab" onclick="switchTab('raw')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+        <button class="tab" id="rawTab" role="tab" aria-selected="false" aria-controls="rawPane" onclick="switchTab('raw')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           Raw Markdown
         </button>
       </div>
       <div class="tab-actions">
-        <button class="action-btn" id="copyBtn" onclick="copyMarkdown()" title="Copy Markdown">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        <button class="action-btn" id="splitViewBtn" onclick="toggleSplitView()" title="Split view" aria-label="Toggle split view">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="18" rx="1"/><rect x="13" y="3" width="8" height="18" rx="1"/></svg>
+          Split
+        </button>
+        <button class="action-btn" id="copyBtn" onclick="copyMarkdown()" title="Copy Markdown" aria-label="Copy Markdown to clipboard">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           Copy
         </button>
-        <button class="action-btn primary" id="downloadBtn" onclick="downloadMarkdown()" title="Download README.md">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        <button class="action-btn primary" id="downloadBtn" onclick="downloadMarkdown()" title="Download README.md" aria-label="Download README.md">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Download
         </button>
-        <button class="action-btn" onclick="resetUI()" title="Generate another">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.87"></path></svg>
+        <button class="action-btn" onclick="resetUI()" title="Generate another" aria-label="Generate new README">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.87"/></svg>
           New
         </button>
       </div>
     </div>
 
-    <!-- Preview Pane -->
-    <div id="previewPane" class="content-pane">
-      <div class="markdown-body" id="markdownPreview"></div>
-    </div>
+    <!-- Content area -->
+    <div class="content-area">
+      <!-- Outline panel -->
+      <div id="outlinePanel" class="outline-panel"></div>
 
-    <!-- Raw Pane -->
-    <div id="rawPane" class="content-pane hidden">
-      <pre class="raw-code" id="rawMarkdown"></pre>
+      <!-- Preview Pane -->
+      <div id="previewPane" class="content-pane" role="tabpanel" aria-labelledby="previewTab">
+        <div class="markdown-body" id="markdownPreview"></div>
+      </div>
+
+      <!-- Raw Pane -->
+      <div id="rawPane" class="content-pane hidden" role="tabpanel" aria-labelledby="rawTab">
+        <pre class="raw-code" id="rawMarkdown"></pre>
+      </div>
     </div>
   </section>
 
-  <!-- How it works section -->
+  <!-- ── How It Works ── -->
   <section class="how-section" id="how-it-works">
-    <h2 class="section-title">How it works</h2>
-    <div class="steps-grid">
-      <div class="step-card">
-        <div class="step-number">01</div>
-        <h3>Paste URL</h3>
-        <p>Enter the URL of any public GitHub repository you want to document.</p>
+    <div class="section-header">
+      <div class="section-eyebrow">Simple by design</div>
+      <h2 class="section-title">How ReadmeForge works</h2>
+      <p class="section-subtitle">From URL to polished README in four automated steps — no config, no templates, no guesswork.</p>
+    </div>
+
+    <div class="steps-list">
+      <div class="step-row">
+        <div class="step-number-badge">01</div>
+        <div class="step-content">
+          <h3>Paste a GitHub URL</h3>
+          <p>Enter the URL of any public GitHub repository. No tokens, no sign-in, no setup required. Optionally add your Gemini API key for AI-powered generation.</p>
+        </div>
       </div>
-      <div class="step-card">
-        <div class="step-number">02</div>
-        <h3>Auto-Analysis</h3>
-        <p>We scan the repo's structure, files, and configs using the GitHub public API.</p>
+      <div class="step-row">
+        <div class="step-number-badge">02</div>
+        <div class="step-content">
+          <h3>Repository analysis</h3>
+          <p>ReadmeForge fetches the repo's file tree, metadata, and key config files (package.json, requirements.txt, Cargo.toml, go.mod, and more) via the GitHub API.</p>
+        </div>
       </div>
-      <div class="step-card">
-        <div class="step-number">03</div>
-        <h3>README Generated</h3>
-        <p>A professional README.md is crafted based on the detected tech stack and metadata.</p>
+      <div class="step-row">
+        <div class="step-number-badge">03</div>
+        <div class="step-content">
+          <h3>AI-powered generation</h3>
+          <p>If a Gemini API key is configured, the full context is sent to Gemini Flash which writes a genuine, contextual README — not a template. Without a key, a smart template system is used as fallback.</p>
+        </div>
       </div>
-      <div class="step-card">
-        <div class="step-number">04</div>
-        <h3>Copy & Use</h3>
-        <p>Preview, copy the markdown, or download the README.md file directly.</p>
+      <div class="step-row">
+        <div class="step-number-badge">04</div>
+        <div class="step-content">
+          <h3>Preview, copy, or download</h3>
+          <p>View the rendered preview or switch to raw Markdown. Use split view to see both side-by-side. Copy to clipboard or download README.md directly.</p>
+        </div>
       </div>
     </div>
   </section>
 
   <footer class="footer">
-    <p>Built with ❤️ using the GitHub Public API &nbsp;·&nbsp; No login required &nbsp;·&nbsp; No data stored</p>
+    <div class="footer-inner">
+      <div class="footer-left">
+        <span class="footer-logo-text">ReadmeForge</span>
+        <span class="footer-logo-sep">—</span>
+        <span class="footer-meta">Powered by GitHub API + Gemini Flash · No data stored · Client-side only</span>
+      </div>
+      <div class="footer-links">
+        <a href="#" class="footer-link" onclick="window.scrollTo({top:0,behavior:'smooth'});return false;">↑ Top</a>
+        <a href="https://github.com/geojose911/ReadmeForge" target="_blank" rel="noopener" class="footer-link">GitHub</a>
+        <a href="https://github.com/geojose911/ReadmeForge/issues" target="_blank" rel="noopener" class="footer-link">Report issue</a>
+      </div>
+    </div>
   </footer>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
