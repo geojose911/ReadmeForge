@@ -1,6 +1,6 @@
 /* ============================================================
-   ReadmeForge – Core Application Logic
-   Uses GitHub Public REST API (unauthenticated, 60 req/hr)
+   ReadmeForge – Core Application Logic v4.0
+   GitHub Public REST API + Google Gemini Flash AI
    ============================================================ */
 
 'use strict';
@@ -8,6 +8,7 @@
 // ── State ──────────────────────────────────────────────────
 let currentMarkdown = '';
 let repoData = null;
+let isSplitView = false;
 
 // ── UI References ──────────────────────────────────────────
 const repoUrlInput  = document.getElementById('repoUrl');
@@ -18,11 +19,110 @@ const errorMessage  = document.getElementById('errorMessage');
 const resultSection = document.getElementById('resultSection');
 const previewPane   = document.getElementById('previewPane');
 const rawPane       = document.getElementById('rawPane');
-const inputCard     = document.getElementById('inputCard');
+const inputBlock    = document.getElementById('inputBlock');
 
-// ── Entry point ────────────────────────────────────────────
+// ── API Key Management ──────────────────────────────────────
+function getApiKey() {
+  return localStorage.getItem('rf_gemini_key') || '';
+}
+
+function saveApiKey() {
+  const input = document.getElementById('apiKeyInput');
+  const key = (input.value || '').trim();
+  if (key) {
+    localStorage.setItem('rf_gemini_key', key);
+    updateKeyStatus(true);
+    updateModeIndicator();
+    toggleSettings();
+  } else {
+    localStorage.removeItem('rf_gemini_key');
+    updateKeyStatus(false);
+    updateModeIndicator();
+  }
+}
+
+function updateKeyStatus(hasKey) {
+  const statusEl = document.getElementById('keyStatus');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const input = document.getElementById('apiKeyInput');
+  if (!statusEl) return;
+  if (hasKey) {
+    statusEl.textContent = 'API key saved — AI mode active';
+    statusEl.className = 'settings-status set';
+    if (settingsBtn) settingsBtn.classList.add('active');
+    if (input) input.value = '';
+  } else {
+    statusEl.textContent = 'No key configured — will use template mode';
+    statusEl.className = 'settings-status';
+    if (settingsBtn) settingsBtn.classList.remove('active');
+  }
+}
+
+function updateModeIndicator() {
+  const el = document.getElementById('modeIndicator');
+  const badge = document.getElementById('aiBadge');
+  if (!el) return;
+  const hasKey = !!getApiKey();
+  if (hasKey) {
+    el.textContent = 'AI mode active (Gemini Flash)';
+    if (badge) {
+      badge.style.display = 'inline-flex';
+    }
+  } else {
+    el.textContent = 'Template mode — add Gemini API key for AI';
+    if (badge) {
+      badge.style.opacity = '0.4';
+    }
+  }
+}
+
+function toggleSettings() {
+  const panel = document.getElementById('settingsPanel');
+  const btn = document.getElementById('settingsBtn');
+  if (!panel) return;
+  const isOpen = !panel.classList.contains('hidden');
+  panel.classList.toggle('hidden');
+  if (btn) {
+    btn.setAttribute('aria-expanded', (!isOpen).toString());
+  }
+}
+
+// Close settings when clicking outside
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('settingsPanel');
+  const btn = document.getElementById('settingsBtn');
+  if (panel && !panel.classList.contains('hidden')) {
+    if (!panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+      panel.classList.add('hidden');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+  }
+});
+
+// ── Init ────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const key = getApiKey();
+  updateKeyStatus(!!key);
+  updateModeIndicator();
+  if (key) {
+    const input = document.getElementById('apiKeyInput');
+    if (input) input.placeholder = '••••••••••••••••••••';
+  }
+});
+
+// ── Keyboard shortcuts ──────────────────────────────────────
 repoUrlInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') handleGenerate();
+});
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleGenerate();
+  if (e.key === 'Escape') {
+    const panel = document.getElementById('settingsPanel');
+    if (panel && !panel.classList.contains('hidden')) {
+      toggleSettings();
+    }
+  }
 });
 
 function setExample(url) {
@@ -30,9 +130,13 @@ function setExample(url) {
   repoUrlInput.focus();
 }
 
+// ── Main Entry Point ────────────────────────────────────────
 async function handleGenerate() {
   const raw = repoUrlInput.value.trim();
-  if (!raw) { shake(inputCard); return; }
+  if (!raw) {
+    shake(inputBlock);
+    return;
+  }
 
   const parsed = parseGitHubUrl(raw);
   if (!parsed) {
@@ -61,32 +165,214 @@ async function generateReadme(owner, repo) {
   showLoading();
 
   try {
-    // Step 1: Repo metadata
-    setStep(1);
+    setStep(1, 25);
     const repoInfo = await fetchJSON(`https://api.github.com/repos/${owner}/${repo}`);
 
-    // Step 2: File tree
-    setStep(2);
+    setStep(2, 45);
     const treeData = await fetchFileTree(owner, repo, repoInfo.default_branch || 'main');
 
-    // Step 3: Read key files
-    setStep(3);
+    setStep(3, 65);
     const fileContents = await readKeyFiles(owner, repo, repoInfo.default_branch || 'main', treeData);
 
-    // Step 4: Generate
-    setStep(4);
-    await sleep(400); // short pause for UX feel
+    setStep(4, 80);
 
-    const markdown = buildReadme(repoInfo, treeData, fileContents);
+    let markdown;
+    const apiKey = getApiKey();
+
+    if (apiKey) {
+      // Try AI generation
+      try {
+        markdown = await generateWithGemini(repoInfo, treeData, fileContents, apiKey);
+      } catch (aiErr) {
+        console.warn('Gemini AI generation failed, falling back to template:', aiErr.message);
+        // Fallback silently to template
+        markdown = buildReadme(repoInfo, treeData, fileContents);
+      }
+    } else {
+      markdown = buildReadme(repoInfo, treeData, fileContents);
+    }
+
+    setStep(5, 100);
+    await sleep(350);
+
     currentMarkdown = markdown;
     repoData = repoInfo;
-
     showResult(repoInfo, markdown);
 
   } catch (err) {
     const msg = formatApiError(err);
     showError(msg);
   }
+}
+
+// ── Gemini AI Integration ───────────────────────────────────
+async function generateWithGemini(repoInfo, paths, fileContents, apiKey) {
+  const owner = repoInfo.owner.login;
+  const repo = repoInfo.name;
+  const stack = detectTechStack(paths, fileContents);
+  const category = detectProjectCategory(repoInfo, paths, fileContents, stack);
+  const license = detectLicense(fileContents, repoInfo);
+  const badges = buildBadges(repoInfo, stack, license);
+
+  // Compose a rich context for the AI
+  const fileList = paths.slice(0, 80).join('\n');
+  const keyFileSummary = Object.entries(fileContents)
+    .map(([name, content]) => `### ${name}\n\`\`\`\n${content.slice(0, 1500)}\n\`\`\``)
+    .join('\n\n');
+
+  const stackSummary = [
+    stack.languages.size ? `Languages: ${[...stack.languages].join(', ')}` : '',
+    stack.frameworks.size ? `Frameworks: ${[...stack.frameworks].join(', ')}` : '',
+    stack.tools.size ? `Tools/Libraries: ${[...stack.tools].join(', ')}` : '',
+    stack.databases.size ? `Databases: ${[...stack.databases].join(', ')}` : '',
+    stack.testing.size ? `Testing: ${[...stack.testing].join(', ')}` : '',
+    stack.cicd.size ? `CI/CD: ${[...stack.cicd].join(', ')}` : '',
+    stack.packageManager ? `Package Manager: ${stack.packageManager}` : '',
+  ].filter(Boolean).join('\n');
+
+  const installCmds = getInstallCommands(repoInfo, fileContents, stack);
+  const runCmds = getRunCommands(fileContents, stack);
+  const testCmds = getTestCommands(fileContents, stack);
+  const acks = buildAcknowledgements(stack, repoInfo);
+
+  const hasDocker = paths.some(p => p === 'Dockerfile' || p.startsWith('Dockerfile.'));
+  const hasDC = paths.some(p => p.includes('docker-compose'));
+  const hasContrib = paths.some(p => /CONTRIBUTING/i.test(p));
+  const topics = repoInfo.topics || [];
+  const projectEmoji = getProjectEmoji(category);
+
+  const prompt = `You are an expert developer writing a professional README.md for a GitHub repository. 
+Your goal is to produce a genuinely helpful, accurate, and well-structured README that sounds like it was written by the project's own development team — not generated by AI. Be specific, technical, and precise. Do NOT include generic filler sentences or obvious placeholder text.
+
+## Repository Context
+
+**Repo:** ${owner}/${repo}
+**Full Name:** ${repoInfo.full_name}
+**Description:** ${repoInfo.description || 'Not provided'}
+**Primary Language:** ${repoInfo.language || 'Unknown'}
+**Stars:** ${repoInfo.stargazers_count} | **Forks:** ${repoInfo.forks_count}
+**Topics:** ${topics.length ? topics.join(', ') : 'None'}
+**Homepage:** ${repoInfo.homepage || 'None'}
+**License:** ${license || 'Not specified'}
+**Clone URL:** ${repoInfo.clone_url}
+**Project Category:** ${category}
+
+## Detected Tech Stack
+${stackSummary || 'Could not detect specific stack'}
+
+## File Structure (top 80 files)
+${fileList}
+
+## Key Configuration Files
+${keyFileSummary || 'None found'}
+
+## Pre-computed Data
+**Shields.io Badges (include these exactly):**
+${badges.join('\n')}
+
+**Install Commands:**
+${installCmds.join('\n')}
+
+**Run Commands:**
+${runCmds.map(c => `${c.label}: ${c.cmd}`).join('\n') || 'Not detected'}
+
+**Test Commands:**
+${testCmds.join('\n') || 'Not detected'}
+
+**Has Docker:** ${hasDocker} | **Has docker-compose:** ${hasDC}
+**Has CONTRIBUTING.md:** ${hasContrib}
+
+**Acknowledgements:**
+${acks ? acks.join('\n') : 'None'}
+
+---
+
+## Instructions
+
+Write a complete, production-quality README.md in **GitHub Flavored Markdown**. Follow these rules strictly:
+
+1. **Start with** a centered header block:
+   - \`<div align="center">\` wrapping: H1 title with the emoji ${projectEmoji}, a one-line italic description, all badges on one line, and three links: [View Demo] [Report Bug] [Request Feature]
+   - Close with \`</div>\`
+   - Then \`---\`
+
+2. **Table of Contents** — Use the actual sections you include. Link format: \`[Section Name](#section-name)\`
+
+3. **Overview** — Write 2–3 sentences that clearly explain what this project does, who it's for, and why it exists. Be specific. Use the repo description and topics as clues. Do NOT start with "This project is...".
+
+4. **Features** — 5–7 specific bullet points drawn from the actual tech stack and file structure. Format: \`- **Bold title** — explanation\`. Reference real technologies detected.
+
+5. **Tech Stack** — A markdown table with columns: Category | Technology | Purpose. Use only detected technologies.
+
+6. **Architecture** (only for api/fullstack categories) — A short ASCII diagram showing how components connect.
+
+7. **Getting Started** → Prerequisites (with version requirements and links) → Installation (numbered steps with code blocks)
+
+8. **Configuration** (only if database/auth/API dependencies detected) — .env table: Variable | Description | Default | Required
+
+9. **Usage** — Actual commands from the detected run commands. Add the localhost URL if it's a web app.
+
+10. **Testing** (only if test commands detected) — Show the commands.
+
+11. **API Reference** (only for api/fullstack) — A skeleton endpoint table.
+
+12. **Docker** (only if Dockerfile found) — docker compose and docker run commands.
+
+13. **Deployment** — 1–2 specific platform recommendations based on the tech stack.
+
+14. **Project Structure** — A compact directory tree (max 20 lines, depth 2–3).
+
+15. **Roadmap** — 6–8 realistic items using GitHub task list syntax: \`- [x]\` for done, \`- [ ]\` for planned.
+
+16. **Contributing** — Standard fork/branch/PR workflow.
+
+17. **License** — One line referencing the detected license.
+
+18. **Footer** — \`<div align="center">\`Made with ❤️ by [${owner}](https://github.com/${owner})\`</div>\`
+
+**Critical rules:**
+- Use real data from the context. No placeholders like "[Your project name]" or "[Add description here]".
+- Code blocks must have language tags (e.g. \`\`\`bash, \`\`\`json).
+- GitHub Alerts syntax: \`> [!NOTE]\`, \`> [!WARNING]\`, etc.
+- Do NOT include any preamble, explanation, or text outside the README content itself.
+- Return ONLY the raw Markdown content. Start immediately with \`<div align="center">\`.`;
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.6,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 8192,
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+        ],
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({}));
+    if (response.status === 400) throw new Error(`Gemini API error: Invalid API key or bad request.`);
+    if (response.status === 429) throw new Error(`Gemini API quota exceeded. Try again in a moment.`);
+    throw new Error(`Gemini API error ${response.status}: ${errData?.error?.message || 'Unknown'}`);
+  }
+
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!text) throw new Error('Gemini returned empty response.');
+
+  return text.trim();
 }
 
 // ── GitHub API Helpers ─────────────────────────────────────
@@ -109,7 +395,6 @@ async function fetchFileTree(owner, repo, branch) {
     );
     return (data.tree || []).filter(f => f.type === 'blob').map(f => f.path);
   } catch {
-    // Fallback: top-level only
     try {
       const data = await fetchJSON(
         `https://api.github.com/repos/${owner}/${repo}/contents/`
@@ -130,12 +415,15 @@ async function readKeyFiles(owner, repo, branch, allPaths) {
     'Makefile', 'CMakeLists.txt', 'CONTRIBUTING.md',
     'LICENSE', 'LICENSE.md', 'LICENSE.txt',
     '.github/workflows', 'docker-compose.yml', 'Dockerfile',
-    'README.md', 'readme.md',
+    'CHANGELOG.md', 'CHANGELOG', 'HISTORY.md',
+    'SECURITY.md', '.eslintrc.js', '.eslintrc.json',
+    'tsconfig.json', 'tailwind.config.js', 'vite.config.js',
+    'next.config.js', 'webpack.config.js',
   ];
 
   const toRead = priority.filter(p =>
     allPaths.some(f => f === p || f.startsWith(p + '/'))
-  ).slice(0, 10); // read at most 10 files to stay under rate limit
+  ).slice(0, 14);
 
   const results = {};
 
@@ -147,7 +435,7 @@ async function readKeyFiles(owner, repo, branch, allPaths) {
         );
         if (res.ok) {
           const text = await res.text();
-          results[filePath] = text.slice(0, 6000); // cap per file
+          results[filePath] = text.slice(0, 8000);
         }
       } catch { /* skip */ }
     })
@@ -170,7 +458,6 @@ function detectTechStack(paths, fileContents) {
     mainLanguage: null,
   };
 
-  // Language detection from file extensions
   const extMap = {
     '.ts': 'TypeScript', '.tsx': 'TypeScript',
     '.js': 'JavaScript', '.jsx': 'JavaScript', '.mjs': 'JavaScript',
@@ -184,6 +471,7 @@ function detectTechStack(paths, fileContents) {
     '.sh': 'Shell', '.bash': 'Shell', '.r': 'R', '.R': 'R',
     '.html': 'HTML', '.css': 'CSS', '.scss': 'SCSS', '.sass': 'SCSS',
     '.vue': 'Vue.js', '.svelte': 'Svelte', '.sol': 'Solidity',
+    '.lua': 'Lua', '.nim': 'Nim', '.zig': 'Zig',
   };
 
   const extCount = {};
@@ -195,7 +483,6 @@ function detectTechStack(paths, fileContents) {
     }
   });
 
-  // Top languages
   Object.entries(extCount)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
@@ -203,7 +490,6 @@ function detectTechStack(paths, fileContents) {
 
   stack.mainLanguage = Object.entries(extCount).sort((a, b) => b[1] - a[1])[0]?.[0];
 
-  // Package.json analysis
   const pkgJson = fileContents['package.json'];
   if (pkgJson) {
     try {
@@ -227,25 +513,41 @@ function detectTechStack(paths, fileContents) {
       if (deps.nestjs || deps['@nestjs/core'])        stack.frameworks.add('NestJS');
       if (deps.electron)                              stack.frameworks.add('Electron');
       if (deps['react-native'])                       stack.frameworks.add('React Native');
+      if (deps.hono)                                  stack.frameworks.add('Hono');
+      if (deps['@solidjs/start'] || deps['solid-js']) stack.frameworks.add('SolidJS');
+      if (deps['@remix-run/react'])                   stack.frameworks.add('Remix');
+      if (deps['astro'])                              stack.frameworks.add('Astro');
       if (deps.tailwindcss)                           stack.tools.add('Tailwind CSS');
       if (deps.typescript || deps['@types/node'])     stack.tools.add('TypeScript');
       if (deps.webpack)                               stack.tools.add('Webpack');
       if (deps.vite)                                  stack.tools.add('Vite');
-      if (deps.prisma || deps['@prisma/client'])      stack.databases.add('Prisma');
+      if (deps.esbuild)                               stack.tools.add('esbuild');
+      if (deps.prisma || deps['@prisma/client'])      stack.databases.add('Prisma ORM');
       if (deps.mongoose)                              stack.databases.add('MongoDB');
       if (deps.pg)                                    stack.databases.add('PostgreSQL');
       if (deps.mysql || deps.mysql2)                  stack.databases.add('MySQL');
       if (deps.redis || deps.ioredis)                 stack.databases.add('Redis');
+      if (deps.drizzle)                               stack.databases.add('Drizzle ORM');
       if (deps.jest)                                  stack.testing.add('Jest');
       if (deps.mocha)                                 stack.testing.add('Mocha');
       if (deps.vitest)                                stack.testing.add('Vitest');
       if (deps.cypress)                               stack.testing.add('Cypress');
       if (deps.playwright || deps['@playwright/test']) stack.testing.add('Playwright');
+      if (deps['@testing-library/react'])             stack.testing.add('Testing Library');
       if (deps.graphql)                               stack.tools.add('GraphQL');
-      if (deps.socket || deps['socket.io'])           stack.tools.add('Socket.IO');
+      if (deps['socket.io'])                          stack.tools.add('Socket.IO');
       if (deps['@supabase/supabase-js'])              stack.databases.add('Supabase');
       if (deps.firebase)                              stack.databases.add('Firebase');
-
+      if (deps['@trpc/server'])                       stack.tools.add('tRPC');
+      if (deps.zod)                                   stack.tools.add('Zod');
+      if (deps['openai'])                             stack.tools.add('OpenAI API');
+      if (deps['@anthropic-ai/sdk'])                  stack.tools.add('Anthropic API');
+      if (deps.stripe)                                stack.tools.add('Stripe');
+      if (deps['shadcn-ui'] || deps['@radix-ui/react-dialog']) stack.tools.add('shadcn/ui');
+      if (deps['lucide-react'] || deps['@heroicons/react']) stack.tools.add('Icon Library');
+      if (deps['framer-motion'])                      stack.tools.add('Framer Motion');
+      if (deps.jsonwebtoken || deps['jose'] || deps['@auth/core']) stack.tools.add('JWT Auth');
+      if (deps['next-auth'] || deps['passport'] || deps['@auth/core']) stack.tools.add('OAuth/Auth');
     } catch { /* invalid JSON */ }
   }
 
@@ -258,48 +560,62 @@ function detectTechStack(paths, fileContents) {
 
   if (pyFiles) {
     stack.runtime = 'Python';
-    if (/django/i.test(pyFiles))             stack.frameworks.add('Django');
-    if (/flask/i.test(pyFiles))              stack.frameworks.add('Flask');
-    if (/fastapi/i.test(pyFiles))            stack.frameworks.add('FastAPI');
-    if (/aiohttp/i.test(pyFiles))            stack.frameworks.add('aiohttp');
-    if (/sqlalchemy/i.test(pyFiles))         stack.databases.add('SQLAlchemy');
-    if (/psycopg2/i.test(pyFiles))           stack.databases.add('PostgreSQL');
-    if (/pymongo/i.test(pyFiles))            stack.databases.add('MongoDB');
-    if (/redis/i.test(pyFiles))              stack.databases.add('Redis');
-    if (/pytest/i.test(pyFiles))             stack.testing.add('pytest');
-    if (/celery/i.test(pyFiles))             stack.tools.add('Celery');
-    if (/pydantic/i.test(pyFiles))           stack.tools.add('Pydantic');
-    if (/numpy/i.test(pyFiles))              stack.tools.add('NumPy');
-    if (/pandas/i.test(pyFiles))             stack.tools.add('Pandas');
-    if (/torch|tensorflow|keras/i.test(pyFiles)) stack.tools.add('ML/AI');
-    if (/scikit/i.test(pyFiles))             stack.tools.add('scikit-learn');
+    if (/django/i.test(pyFiles))           stack.frameworks.add('Django');
+    if (/flask/i.test(pyFiles))            stack.frameworks.add('Flask');
+    if (/fastapi/i.test(pyFiles))          stack.frameworks.add('FastAPI');
+    if (/aiohttp/i.test(pyFiles))          stack.frameworks.add('aiohttp');
+    if (/litestar/i.test(pyFiles))         stack.frameworks.add('Litestar');
+    if (/sqlalchemy/i.test(pyFiles))       stack.databases.add('SQLAlchemy');
+    if (/psycopg2/i.test(pyFiles))         stack.databases.add('PostgreSQL');
+    if (/pymongo/i.test(pyFiles))          stack.databases.add('MongoDB');
+    if (/redis/i.test(pyFiles))            stack.databases.add('Redis');
+    if (/pytest/i.test(pyFiles))           stack.testing.add('pytest');
+    if (/celery/i.test(pyFiles))           stack.tools.add('Celery');
+    if (/pydantic/i.test(pyFiles))         stack.tools.add('Pydantic');
+    if (/numpy/i.test(pyFiles))            stack.tools.add('NumPy');
+    if (/pandas/i.test(pyFiles))           stack.tools.add('Pandas');
+    if (/torch/i.test(pyFiles))            stack.tools.add('PyTorch');
+    if (/tensorflow|keras/i.test(pyFiles)) stack.tools.add('TensorFlow');
+    if (/scikit/i.test(pyFiles))           stack.tools.add('scikit-learn');
+    if (/openai/i.test(pyFiles))           stack.tools.add('OpenAI API');
+    if (/langchain/i.test(pyFiles))        stack.tools.add('LangChain');
+    if (/alembic/i.test(pyFiles))          stack.tools.add('Alembic');
+    if (/uvicorn/i.test(pyFiles))          stack.tools.add('Uvicorn');
   }
 
   // Rust
   if (fileContents['Cargo.toml']) {
     stack.runtime = 'Rust';
     const cargo = fileContents['Cargo.toml'];
-    if (/tokio/i.test(cargo))               stack.frameworks.add('Tokio');
-    if (/axum|actix|warp/i.test(cargo))     stack.frameworks.add(/axum/i.test(cargo) ? 'Axum' : /actix/i.test(cargo) ? 'Actix-web' : 'Warp');
-    if (/serde/i.test(cargo))               stack.tools.add('Serde');
-    if (/diesel|sqlx/i.test(cargo))         stack.databases.add('SQLx/Diesel');
+    if (/tokio/i.test(cargo))    stack.frameworks.add('Tokio');
+    if (/axum/i.test(cargo))     stack.frameworks.add('Axum');
+    if (/actix/i.test(cargo))    stack.frameworks.add('Actix-web');
+    if (/warp/i.test(cargo))     stack.frameworks.add('Warp');
+    if (/serde/i.test(cargo))    stack.tools.add('Serde');
+    if (/diesel/i.test(cargo))   stack.databases.add('Diesel ORM');
+    if (/sqlx/i.test(cargo))     stack.databases.add('SQLx');
+    if (/clap/i.test(cargo))     stack.tools.add('Clap CLI');
+    if (/tauri/i.test(cargo))    stack.frameworks.add('Tauri');
   }
 
   // Go
   if (fileContents['go.mod']) {
     stack.runtime = 'Go';
     const gomod = fileContents['go.mod'];
-    if (/gin-gonic|gin/i.test(gomod))       stack.frameworks.add('Gin');
-    if (/echo/i.test(gomod))                stack.frameworks.add('Echo');
-    if (/fiber/i.test(gomod))               stack.frameworks.add('Fiber');
-    if (/gorm/i.test(gomod))                stack.databases.add('GORM');
+    if (/gin-gonic|gin/i.test(gomod)) stack.frameworks.add('Gin');
+    if (/echo/i.test(gomod))          stack.frameworks.add('Echo');
+    if (/fiber/i.test(gomod))         stack.frameworks.add('Fiber');
+    if (/chi/i.test(gomod))           stack.frameworks.add('Chi');
+    if (/gorm/i.test(gomod))          stack.databases.add('GORM');
+    if (/cobra/i.test(gomod))         stack.tools.add('Cobra CLI');
   }
 
-  // Java / Kotlin
+  // JVM
   if (fileContents['pom.xml'] || fileContents['build.gradle'] || fileContents['build.gradle.kts']) {
     const jvmFiles = [fileContents['pom.xml'], fileContents['build.gradle'], fileContents['build.gradle.kts']].filter(Boolean).join('\n');
-    if (/spring/i.test(jvmFiles))           stack.frameworks.add('Spring Boot');
-    if (/junit/i.test(jvmFiles))            stack.testing.add('JUnit');
+    if (/spring/i.test(jvmFiles))     stack.frameworks.add('Spring Boot');
+    if (/junit/i.test(jvmFiles))      stack.testing.add('JUnit');
+    if (/hibernate/i.test(jvmFiles))  stack.databases.add('Hibernate ORM');
   }
 
   // Docker / CI/CD
@@ -308,18 +624,88 @@ function detectTechStack(paths, fileContents) {
   if (paths.some(p => p.includes('.github/workflows'))) stack.cicd.add('GitHub Actions');
   if (paths.some(p => p.includes('.travis.yml')))       stack.cicd.add('Travis CI');
   if (paths.some(p => p.includes('.circleci')))         stack.cicd.add('CircleCI');
-  if (paths.some(p => p === 'Makefile'))                stack.tools.add('Makefile');
+  if (paths.some(p => p.includes('vercel.json') || p.includes('.vercel'))) stack.tools.add('Vercel');
+  if (paths.some(p => p === 'Makefile'))                stack.tools.add('Make');
   if (paths.some(p => p === 'pubspec.yaml'))            { stack.frameworks.add('Flutter'); stack.runtime = 'Dart'; }
+  if (paths.some(p => /\.github\/ISSUE_TEMPLATE/i.test(p))) stack.tools.add('Issue Templates');
+  if (paths.some(p => /\.github\/PULL_REQUEST_TEMPLATE/i.test(p))) stack.tools.add('PR Template');
 
   return stack;
 }
 
+// ── Project Category Detection ──────────────────────────────
+function detectProjectCategory(repoInfo, paths, fileContents, stack) {
+  const topics = repoInfo.topics || [];
+  const description = (repoInfo.description || '').toLowerCase();
+  const name = (repoInfo.name || '').toLowerCase();
+
+  if (stack.frameworks.has('Flutter') || stack.frameworks.has('React Native') ||
+      stack.languages.has('Swift') || stack.languages.has('Kotlin') ||
+      paths.some(p => p.includes('android/') || p.includes('ios/'))) {
+    return 'mobile';
+  }
+
+  if (stack.tools.has('PyTorch') || stack.tools.has('TensorFlow') || stack.tools.has('scikit-learn') ||
+      stack.tools.has('NumPy') || stack.tools.has('Pandas') || stack.tools.has('LangChain') ||
+      stack.tools.has('OpenAI API') || stack.tools.has('Anthropic API') ||
+      topics.some(t => ['ml', 'ai', 'machine-learning', 'deep-learning', 'llm', 'nlp'].includes(t)) ||
+      /machine.learning|deep.learning|neural|ml|ai|llm|nlp/i.test(description)) {
+    return 'ml_ai';
+  }
+
+  if (stack.frameworks.has('Electron') || stack.frameworks.has('Tauri')) return 'desktop';
+
+  if (topics.some(t => ['cli', 'command-line', 'terminal', 'shell-script'].includes(t)) ||
+      stack.tools.has('Cobra CLI') || stack.tools.has('Clap CLI') ||
+      /command.line|cli tool|terminal/i.test(description) ||
+      (name.includes('cli') || name.endsWith('-cli'))) {
+    return 'cli';
+  }
+
+  const isLibrary = (topics.some(t => ['library', 'package', 'sdk', 'npm', 'module', 'plugin'].includes(t)) ||
+    /library|package|sdk|plugin|module|component/i.test(description) ||
+    (fileContents['package.json'] && (() => {
+      try {
+        const pkg = JSON.parse(fileContents['package.json']);
+        return pkg.main || pkg.exports || (pkg.files && !pkg.scripts?.dev);
+      } catch { return false; }
+    })()));
+
+  if (isLibrary) return 'library';
+
+  if (paths.some(p => p === 'manifest.json') &&
+      paths.some(p => p.includes('background') || p.includes('content_script') || p.includes('popup'))) {
+    return 'browser_extension';
+  }
+
+  const hasUI = stack.frameworks.has('React') || stack.frameworks.has('Next.js') ||
+                 stack.frameworks.has('Vue.js') || stack.frameworks.has('Nuxt.js') ||
+                 stack.frameworks.has('Angular') || stack.frameworks.has('Svelte') ||
+                 stack.frameworks.has('SolidJS') || stack.frameworks.has('Remix') ||
+                 stack.frameworks.has('Astro') || stack.languages.has('HTML');
+
+  const hasBackend = stack.frameworks.has('Express.js') || stack.frameworks.has('Fastify') ||
+                     stack.frameworks.has('NestJS') || stack.frameworks.has('Koa') ||
+                     stack.frameworks.has('Django') || stack.frameworks.has('Flask') ||
+                     stack.frameworks.has('FastAPI') || stack.frameworks.has('Spring Boot') ||
+                     stack.frameworks.has('Gin') || stack.frameworks.has('Echo') ||
+                     stack.frameworks.has('Axum') || stack.frameworks.has('Fiber') ||
+                     stack.databases.size > 0;
+
+  if (hasUI && hasBackend) return 'fullstack';
+  if (hasUI) return 'webapp';
+  if (hasBackend) return 'api';
+
+  if (paths.some(p => /mkdocs|docusaurus|jekyll|gatsby|hugo|11ty/i.test(p))) return 'docs_site';
+  if (paths.every(p => /\.md$|\.txt$|\.rst$/i.test(p))) return 'docs';
+
+  return 'generic';
+}
+
 // ── Installation Commands ───────────────────────────────────
-function getInstallCommands(repoInfo, fileContents, stack, paths) {
+function getInstallCommands(repoInfo, fileContents, stack) {
   const sections = [];
-  const owner = repoInfo.owner.login;
   const repo = repoInfo.name;
-  const branch = repoInfo.default_branch;
 
   sections.push(`git clone ${repoInfo.clone_url}`);
   sections.push(`cd ${repo}`);
@@ -328,56 +714,43 @@ function getInstallCommands(repoInfo, fileContents, stack, paths) {
     const pm = stack.packageManager || 'npm';
     sections.push(pm === 'Yarn' ? 'yarn install' : pm === 'pnpm' ? 'pnpm install' : pm === 'Bun' ? 'bun install' : 'npm install');
   }
-
-  if (fileContents['requirements.txt']) {
-    sections.push('pip install -r requirements.txt');
-  }
-
-  if (fileContents['pyproject.toml'] && !fileContents['requirements.txt']) {
-    sections.push('pip install -e .');
-  }
-
-  if (fileContents['Cargo.toml']) {
-    sections.push('cargo build');
-  }
-
-  if (fileContents['go.mod']) {
-    sections.push('go mod download');
-  }
-
-  if (fileContents['Gemfile']) {
-    sections.push('bundle install');
-  }
-
-  if (fileContents['composer.json']) {
-    sections.push('composer install');
-  }
-
-  if (fileContents['pubspec.yaml']) {
-    sections.push('flutter pub get');
-  }
+  if (fileContents['requirements.txt']) sections.push('pip install -r requirements.txt');
+  if (fileContents['pyproject.toml'] && !fileContents['requirements.txt']) sections.push('pip install -e .');
+  if (fileContents['Cargo.toml']) sections.push('cargo build');
+  if (fileContents['go.mod']) sections.push('go mod download');
+  if (fileContents['Gemfile']) sections.push('bundle install');
+  if (fileContents['composer.json']) sections.push('composer install');
+  if (fileContents['pubspec.yaml']) sections.push('flutter pub get');
 
   return sections;
 }
 
 // ── Run Commands ────────────────────────────────────────────
-function getRunCommands(fileContents, stack, paths) {
+function getRunCommands(fileContents, stack) {
   const cmds = [];
 
   if (fileContents['package.json']) {
     try {
       const pkg = JSON.parse(fileContents['package.json']);
       const scripts = pkg.scripts || {};
-      if (scripts.dev)   cmds.push({ label: 'Development', cmd: `${stack.packageManager === 'Yarn' ? 'yarn' : stack.packageManager === 'pnpm' ? 'pnpm' : 'npm run'} dev` });
-      if (scripts.start) cmds.push({ label: 'Production', cmd: `${stack.packageManager === 'Yarn' ? 'yarn' : stack.packageManager === 'pnpm' ? 'pnpm' : 'npm'} start` });
-      if (scripts.build) cmds.push({ label: 'Build', cmd: `${stack.packageManager === 'Yarn' ? 'yarn' : stack.packageManager === 'pnpm' ? 'pnpm' : 'npm run'} build` });
+      const pm = stack.packageManager || 'npm';
+      const run = pm === 'Yarn' ? 'yarn' : pm === 'pnpm' ? 'pnpm' : pm === 'Bun' ? 'bun run' : 'npm run';
+      const start = pm === 'Yarn' ? 'yarn start' : pm === 'pnpm' ? 'pnpm start' : pm === 'Bun' ? 'bun start' : 'npm start';
+
+      if (scripts.dev)   cmds.push({ label: 'Development server', cmd: `${run} dev` });
+      if (scripts.start) cmds.push({ label: 'Production', cmd: start });
+      if (scripts.build) cmds.push({ label: 'Build for production', cmd: `${run} build` });
+      if (scripts.preview) cmds.push({ label: 'Preview production build', cmd: `${run} preview` });
     } catch { /* */ }
   }
 
   if (fileContents['pyproject.toml'] || fileContents['requirements.txt']) {
-    if (stack.frameworks.has('FastAPI') || stack.frameworks.has('Flask')) {
-      cmds.push({ label: 'Start server', cmd: stack.frameworks.has('FastAPI') ? 'uvicorn main:app --reload' : 'flask run' });
+    if (stack.frameworks.has('FastAPI')) {
+      cmds.push({ label: 'Start server', cmd: 'uvicorn app.main:app --reload' });
+    } else if (stack.frameworks.has('Flask')) {
+      cmds.push({ label: 'Start server', cmd: 'flask run --debug' });
     } else if (stack.frameworks.has('Django')) {
+      cmds.push({ label: 'Run migrations', cmd: 'python manage.py migrate' });
       cmds.push({ label: 'Start server', cmd: 'python manage.py runserver' });
     } else {
       cmds.push({ label: 'Run', cmd: 'python main.py' });
@@ -395,7 +768,8 @@ function getRunCommands(fileContents, stack, paths) {
   }
 
   if (fileContents['pubspec.yaml']) {
-    cmds.push({ label: 'Run', cmd: 'flutter run' });
+    cmds.push({ label: 'Run on connected device', cmd: 'flutter run' });
+    cmds.push({ label: 'Build Android APK', cmd: 'flutter build apk --release' });
   }
 
   return cmds;
@@ -404,12 +778,12 @@ function getRunCommands(fileContents, stack, paths) {
 // ── Test Commands ────────────────────────────────────────────
 function getTestCommands(fileContents, stack) {
   const cmds = [];
+  const pm = stack.packageManager || 'npm';
+  const run = pm === 'Yarn' ? 'yarn' : pm === 'pnpm' ? 'pnpm' : pm === 'Bun' ? 'bun run' : 'npm run';
 
-  if (stack.testing.has('Jest') || stack.testing.has('Vitest')) {
-    const pm = stack.packageManager;
-    cmds.push(pm === 'Yarn' ? 'yarn test' : pm === 'pnpm' ? 'pnpm test' : 'npm test');
+  if (stack.testing.has('Jest') || stack.testing.has('Vitest') || stack.testing.has('Testing Library')) {
+    cmds.push(`${run} test`);
   }
-
   if (stack.testing.has('pytest')) cmds.push('pytest');
   if (stack.testing.has('Cypress')) cmds.push('npx cypress run');
   if (stack.testing.has('Playwright')) cmds.push('npx playwright test');
@@ -421,9 +795,8 @@ function getTestCommands(fileContents, stack) {
   if (cmds.length === 0 && fileContents['package.json']) {
     try {
       const pkg = JSON.parse(fileContents['package.json']);
-      if (pkg.scripts?.test) {
-        const pm = stack.packageManager;
-        cmds.push(pm === 'Yarn' ? 'yarn test' : pm === 'pnpm' ? 'pnpm test' : 'npm test');
+      if (pkg.scripts?.test && pkg.scripts.test !== 'echo "Error: no test specified" && exit 1') {
+        cmds.push(`${run} test`);
       }
     } catch { /* */ }
   }
@@ -436,9 +809,11 @@ function detectLicense(fileContents, repoInfo) {
   if (repoInfo.license) return repoInfo.license.spdx_id || repoInfo.license.name;
   const licenseFile = fileContents['LICENSE'] || fileContents['LICENSE.md'] || fileContents['LICENSE.txt'] || '';
   if (/MIT License/i.test(licenseFile)) return 'MIT';
-  if (/Apache License/i.test(licenseFile)) return 'Apache-2.0';
+  if (/Apache License.*2\.0/i.test(licenseFile)) return 'Apache-2.0';
   if (/GNU GENERAL PUBLIC LICENSE/i.test(licenseFile)) return /Version 3/.test(licenseFile) ? 'GPL-3.0' : 'GPL-2.0';
-  if (/BSD/i.test(licenseFile)) return 'BSD';
+  if (/BSD/i.test(licenseFile)) return 'BSD-3-Clause';
+  if (/ISC License/i.test(licenseFile)) return 'ISC';
+  if (/Mozilla Public License/i.test(licenseFile)) return 'MPL-2.0';
   return null;
 }
 
@@ -457,18 +832,134 @@ function toTitle(str) {
   return str.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// ── Project Description ─────────────────────────────────────
-function getDescription(repoInfo, fileContents) {
-  if (repoInfo.description) return repoInfo.description;
+// ── Smart Description ────────────────────────────────────────
+function buildSmartDescription(repoInfo, fileContents, projectCategory, stack) {
+  let base = repoInfo.description || '';
 
-  // Try package.json
-  if (fileContents['package.json']) {
+  if (!base && fileContents['package.json']) {
     try {
       const pkg = JSON.parse(fileContents['package.json']);
-      if (pkg.description) return pkg.description;
+      if (pkg.description) base = pkg.description;
     } catch { /* */ }
   }
-  return null;
+
+  const topics = repoInfo.topics || [];
+  const projectName = getProjectName(repoInfo, fileContents);
+  const mainLang = stack.mainLanguage || (stack.runtime) || 'code';
+  const mainFw = Array.from(stack.frameworks)[0] || null;
+
+  if (base) {
+    let expanded = base;
+    if (mainFw && !base.toLowerCase().includes(mainFw.toLowerCase())) {
+      expanded += ` Built with ${mainFw}`;
+      if (stack.databases.size > 0) expanded += ` and ${Array.from(stack.databases)[0]}`;
+      expanded += '.';
+    }
+    return expanded;
+  }
+
+  const categoryDescriptions = {
+    webapp: `${projectName} is a modern web application${mainFw ? ` built with ${mainFw}` : ''}${stack.databases.size > 0 ? `, backed by ${Array.from(stack.databases)[0]}` : ''}. It provides a clean, responsive interface designed for${topics.length ? ' ' + topics.slice(0, 2).join(' and ') : ' everyday use'}.`,
+    api: `${projectName} is a ${mainFw ? mainFw + ' ' : ''}API service${stack.databases.size > 0 ? ` with ${Array.from(stack.databases)[0]} integration` : ''}. It exposes a clean, versioned REST API for${topics.length ? ' ' + topics.slice(0, 2).join(' and ') : ' your application needs'}.`,
+    fullstack: `${projectName} is a full-stack application${mainFw ? ` powered by ${mainFw}` : ''}${stack.databases.size > 0 ? ` with ${Array.from(stack.databases)[0]}` : ''}. It includes both a modern frontend interface and a robust backend API.`,
+    cli: `${projectName} is a command-line tool${mainLang !== 'code' ? ` written in ${mainLang}` : ''}. It provides a simple, fast interface for${topics.length ? ' ' + topics.slice(0, 2).join(' and ') : ' common development workflows'} directly from your terminal.`,
+    library: `${projectName} is a ${mainLang !== 'code' ? mainLang + ' ' : ''}library${topics.length ? ' for ' + topics.slice(0, 2).join(' and ') : ''}. It provides a clean, well-tested API that integrates seamlessly into your existing projects.`,
+    mobile: `${projectName} is a ${stack.frameworks.has('Flutter') ? 'Flutter' : stack.frameworks.has('React Native') ? 'React Native' : 'mobile'} application. It delivers a native experience across${stack.frameworks.has('Flutter') ? ' iOS, Android, and Web' : ' iOS and Android'}.`,
+    ml_ai: `${projectName} is a ${stack.tools.has('PyTorch') ? 'PyTorch' : stack.tools.has('TensorFlow') ? 'TensorFlow' : 'Python'}-based machine learning project. It provides tools and models for intelligent data processing and analysis.`,
+    desktop: `${projectName} is a desktop application built with ${stack.frameworks.has('Electron') ? 'Electron' : 'Tauri'}${mainLang !== 'code' ? ` and ${mainLang}` : ''}.`,
+    docs_site: `${projectName} is the official documentation site. It provides comprehensive guides, API references, and tutorials.`,
+    generic: `${projectName} is a ${mainLang !== 'code' ? mainLang + ' ' : ''}project${topics.length ? ' focused on ' + topics.slice(0, 2).join(' and ') : ''}${mainFw ? ', built with ' + mainFw : ''}.`,
+  };
+
+  return categoryDescriptions[projectCategory] || categoryDescriptions.generic;
+}
+
+// ── Badge Builder ────────────────────────────────────────────
+function buildBadges(repoInfo, stack, license) {
+  const { owner: { login: owner }, name: repo } = repoInfo;
+  const badges = [];
+
+  const langColors = {
+    TypeScript: '3178c6', JavaScript: 'f7df1e&logoColor=black', Python: '3572A5',
+    Rust: 'ce422b', Go: '00ADD8', Java: 'b07219', Kotlin: 'F18E33',
+    'C#': '178600', 'C++': 'f34b7d', Ruby: '701516', Swift: 'F05138',
+    Dart: '00B4AB', PHP: '4F5D95', Elixir: '6e4a7e',
+  };
+
+  if (stack.mainLanguage) {
+    const color = langColors[stack.mainLanguage] || '555555';
+    badges.push(`![${stack.mainLanguage}](https://img.shields.io/badge/${encodeURIComponent(stack.mainLanguage)}-${color}?style=flat-square&logo=${encodeURIComponent(stack.mainLanguage.toLowerCase())}&logoColor=white)`);
+  }
+
+  const fwBadgeMap = {
+    'React': 'React-20232A?logo=react&logoColor=61DAFB',
+    'Next.js': 'Next.js-000000?logo=next.js',
+    'Vue.js': 'Vue.js-4FC08D?logo=vue.js&logoColor=white',
+    'Nuxt.js': 'Nuxt.js-00DC82?logo=nuxt.js&logoColor=white',
+    'Angular': 'Angular-DD0031?logo=angular',
+    'Svelte': 'Svelte-FF3E00?logo=svelte&logoColor=white',
+    'SolidJS': 'SolidJS-2C4F7C?logo=solid&logoColor=white',
+    'Remix': 'Remix-000000?logo=remix',
+    'Astro': 'Astro-BC52EE?logo=astro&logoColor=white',
+    'Express.js': 'Express-000000?logo=express',
+    'Fastify': 'Fastify-000000?logo=fastify',
+    'Hono': 'Hono-E36002?logo=hono&logoColor=white',
+    'NestJS': 'NestJS-E0234E?logo=nestjs',
+    'Django': 'Django-092E20?logo=django',
+    'FastAPI': 'FastAPI-009688?logo=fastapi',
+    'Flask': 'Flask-000000?logo=flask',
+    'Electron': 'Electron-47848F?logo=electron',
+    'Tauri': 'Tauri-24C8D8?logo=tauri&logoColor=white',
+    'Flutter': 'Flutter-02569B?logo=flutter',
+    'React Native': 'React_Native-20232A?logo=react',
+    'Spring Boot': 'Spring_Boot-6DB33F?logo=spring-boot',
+    'Gin': 'Gin-00ACD7?logo=go&logoColor=white',
+    'Fiber': 'Fiber-00ACD7?logo=go&logoColor=white',
+  };
+
+  stack.frameworks.forEach(fw => {
+    if (fwBadgeMap[fw]) {
+      badges.push(`![${fw}](https://img.shields.io/badge/${fwBadgeMap[fw]}&style=flat-square)`);
+    }
+  });
+
+  const dbBadgeMap = {
+    'PostgreSQL': 'PostgreSQL-316192?logo=postgresql&logoColor=white',
+    'MongoDB': 'MongoDB-4EA94B?logo=mongodb&logoColor=white',
+    'MySQL': 'MySQL-005C84?logo=mysql&logoColor=white',
+    'Redis': 'Redis-DC382D?logo=redis&logoColor=white',
+    'Supabase': 'Supabase-3ECF8E?logo=supabase&logoColor=white',
+    'Firebase': 'Firebase-FFCA28?logo=firebase&logoColor=black',
+  };
+
+  stack.databases.forEach(db => {
+    if (dbBadgeMap[db]) {
+      badges.push(`![${db}](https://img.shields.io/badge/${dbBadgeMap[db]}&style=flat-square)`);
+    }
+  });
+
+  badges.push(`![GitHub Stars](https://img.shields.io/github/stars/${owner}/${repo}?style=flat-square&logo=github)`);
+  badges.push(`![GitHub Forks](https://img.shields.io/github/forks/${owner}/${repo}?style=flat-square&logo=github)`);
+
+  if (license && license !== 'NOASSERTION') {
+    badges.push(`![License](https://img.shields.io/badge/license-${encodeURIComponent(license)}-blue?style=flat-square)`);
+  }
+
+  if (stack.cicd.has('GitHub Actions')) {
+    badges.push(`![CI](https://img.shields.io/github/actions/workflow/status/${owner}/${repo}/ci.yml?style=flat-square&label=CI)`);
+  }
+
+  return badges;
+}
+
+// ── Emoji for project type ───────────────────────────────────
+function getProjectEmoji(category) {
+  const map = {
+    webapp: '🌐', api: '🔌', fullstack: '🚀', cli: '⚡', library: '📦',
+    mobile: '📱', ml_ai: '🤖', desktop: '🖥️', docs_site: '📚',
+    browser_extension: '🧩', docs: '📄', generic: '🔧'
+  };
+  return map[category] || '🚀';
 }
 
 // ── Directory Structure ──────────────────────────────────────
@@ -481,7 +972,7 @@ function buildDirectoryTree(paths, maxDepth = 2) {
     }
   });
 
-  const tree = Array.from(items).sort().slice(0, 24);
+  const tree = Array.from(items).sort().slice(0, 28);
   if (tree.length === 0) return null;
 
   let out = '```\n';
@@ -496,120 +987,129 @@ function buildDirectoryTree(paths, maxDepth = 2) {
   return out;
 }
 
-// ── Badge Builder ────────────────────────────────────────────
-function buildBadges(repoInfo, stack, license) {
-  const { owner: { login: owner }, name: repo } = repoInfo;
-  const badges = [];
-
-  // Language badge
-  const langColors = {
-    TypeScript: '3178c6', JavaScript: 'f7df1e', Python: '3572A5',
-    Rust: 'dea584', Go: '00ADD8', Java: 'b07219', Kotlin: 'F18E33',
-    'C#': '178600', 'C++': 'f34b7d', Ruby: '701516', Swift: 'F05138',
-    Dart: '00B4AB', PHP: '4F5D95', Elixir: '6e4a7e',
+// ── Acknowledgements ─────────────────────────────────────────
+function buildAcknowledgements(stack, repoInfo) {
+  const items = [];
+  const ackMap = {
+    'React': '[React](https://react.dev/) — The library for web and native user interfaces',
+    'Next.js': '[Next.js](https://nextjs.org/) — The React framework for production',
+    'Vue.js': '[Vue.js](https://vuejs.org/) — The Progressive JavaScript Framework',
+    'Angular': '[Angular](https://angular.io/) — Platform for building web applications',
+    'Svelte': '[Svelte](https://svelte.dev/) — Cybernetically enhanced web apps',
+    'Express.js': '[Express.js](https://expressjs.com/) — Fast, unopinionated web framework for Node',
+    'FastAPI': '[FastAPI](https://fastapi.tiangolo.com/) — Modern, fast web framework for Python',
+    'Django': '[Django](https://www.djangoproject.com/) — The web framework for perfectionists',
+    'Flask': '[Flask](https://flask.palletsprojects.com/) — A lightweight WSGI web framework',
+    'NestJS': '[NestJS](https://nestjs.com/) — A progressive Node.js framework',
+    'Gin': '[Gin](https://gin-gonic.com/) — HTTP web framework written in Go',
+    'Axum': '[Axum](https://github.com/tokio-rs/axum) — Ergonomic and modular web framework for Rust',
+    'Tailwind CSS': '[Tailwind CSS](https://tailwindcss.com/) — A utility-first CSS framework',
+    'Flutter': '[Flutter](https://flutter.dev/) — Build apps for any screen from a single codebase',
+    'PyTorch': '[PyTorch](https://pytorch.org/) — An open-source machine learning framework',
+    'TensorFlow': '[TensorFlow](https://www.tensorflow.org/) — End-to-end open-source ML platform',
+    'Electron': '[Electron](https://www.electronjs.org/) — Build cross-platform desktop apps',
+    'Tauri': '[Tauri](https://tauri.app/) — Build smaller, faster, and more secure desktop apps',
+    'Vite': '[Vite](https://vitejs.dev/) — Next generation frontend tooling',
+    'Prisma ORM': '[Prisma](https://www.prisma.io/) — Next-generation Node.js and TypeScript ORM',
+    'Supabase': '[Supabase](https://supabase.com/) — The open-source Firebase alternative',
+    'shadcn/ui': '[shadcn/ui](https://ui.shadcn.com/) — Beautifully designed accessible components',
   };
 
-  if (stack.mainLanguage) {
-    const color = langColors[stack.mainLanguage] || '555555';
-    badges.push(`![${stack.mainLanguage}](https://img.shields.io/badge/${encodeURIComponent(stack.mainLanguage)}-${color}?style=flat-square&logo=${encodeURIComponent(stack.mainLanguage.toLowerCase())}&logoColor=white)`);
-  }
-
-  // Framework badges
-  const fwBadgeMap = {
-    'React': 'React-61DAFB?logo=react&logoColor=black',
-    'Next.js': 'Next.js-000000?logo=next.js',
-    'Vue.js': 'Vue.js-4FC08D?logo=vue.js&logoColor=white',
-    'Nuxt.js': 'Nuxt.js-00DC82?logo=nuxt.js&logoColor=white',
-    'Angular': 'Angular-DD0031?logo=angular',
-    'Svelte': 'Svelte-FF3E00?logo=svelte&logoColor=white',
-    'Express.js': 'Express-000000?logo=express',
-    'Fastify': 'Fastify-000000?logo=fastify',
-    'NestJS': 'NestJS-E0234E?logo=nestjs',
-    'Django': 'Django-092E20?logo=django',
-    'FastAPI': 'FastAPI-009688?logo=fastapi',
-    'Flask': 'Flask-000000?logo=flask',
-    'Electron': 'Electron-47848F?logo=electron',
-    'Flutter': 'Flutter-02569B?logo=flutter',
-    'Spring Boot': 'Spring_Boot-6DB33F?logo=spring-boot',
-    'Tokio': 'Tokio-000000?logo=rust',
-    'Gin': 'Gin-00ACD7?logo=go&logoColor=white',
-  };
-
-  stack.frameworks.forEach(fw => {
-    if (fwBadgeMap[fw]) {
-      badges.push(`![${fw}](https://img.shields.io/badge/${fwBadgeMap[fw]}&style=flat-square)`);
-    }
+  [...stack.frameworks, ...stack.tools, ...stack.databases].forEach(item => {
+    if (ackMap[item]) items.push(ackMap[item]);
   });
 
-  // Stars & Forks
-  badges.push(`![GitHub Stars](https://img.shields.io/github/stars/${owner}/${repo}?style=flat-square&logo=github)`);
-  badges.push(`![GitHub Forks](https://img.shields.io/github/forks/${owner}/${repo}?style=flat-square&logo=github)`);
-
-  // License
-  if (license && license !== 'NOASSERTION') {
-    badges.push(`![License](https://img.shields.io/badge/license-${encodeURIComponent(license)}-blue?style=flat-square)`);
-  }
-
-  // CI/CD
-  if (stack.cicd.has('GitHub Actions')) {
-    badges.push(`![CI](https://img.shields.io/github/actions/workflow/status/${owner}/${repo}/ci.yml?style=flat-square&label=CI)`);
-  }
-
-  return badges;
+  return items.slice(0, 6);
 }
 
-// ── README Builder ────────────────────────────────────────────
+function projectUsesAuth(stack, paths) {
+  return stack.tools.has('JWT Auth') || stack.tools.has('OAuth/Auth') ||
+         paths.some(p => /auth|passport|middleware/i.test(p));
+}
+
+function buildEnvVarsTable(repoInfo, stack, projectCategory, paths) {
+  const rows = [];
+  const defaultPort = stack.frameworks.has('FastAPI') || stack.frameworks.has('Flask') || stack.frameworks.has('Django')
+    ? '8000' : stack.frameworks.has('Spring Boot') ? '8080' : '3000';
+
+  const isServerProject = ['api', 'fullstack', 'webapp'].includes(projectCategory) && stack.databases.size > 0;
+  const needsAuth = projectUsesAuth(stack, paths);
+
+  if (isServerProject || projectCategory === 'api') {
+    rows.push(`| \`NODE_ENV\` | Runtime environment | \`development\` | No |`);
+    rows.push(`| \`PORT\` | Server port | \`${defaultPort}\` | No |`);
+  }
+
+  if (stack.databases.has('PostgreSQL') || stack.databases.has('SQLAlchemy') || stack.databases.has('Prisma ORM') || stack.databases.has('Drizzle ORM')) {
+    rows.push(`| \`DATABASE_URL\` | PostgreSQL connection string | — | **Yes** |`);
+  }
+  if (stack.databases.has('MongoDB')) {
+    rows.push(`| \`MONGODB_URI\` | MongoDB connection URI | \`mongodb://localhost:27017/${repoInfo.name}\` | **Yes** |`);
+  }
+  if (stack.databases.has('Redis')) {
+    rows.push(`| \`REDIS_URL\` | Redis server URI | \`redis://localhost:6379\` | No |`);
+  }
+  if (stack.databases.has('Supabase')) {
+    rows.push(`| \`SUPABASE_URL\` | Your Supabase project URL | — | **Yes** |`);
+    rows.push(`| \`SUPABASE_ANON_KEY\` | Public anon key | — | **Yes** |`);
+    rows.push(`| \`SUPABASE_SERVICE_ROLE_KEY\` | Server-side admin key | — | **Yes** |`);
+  }
+  if (stack.databases.has('Firebase')) {
+    rows.push(`| \`FIREBASE_PROJECT_ID\` | Firebase project ID | — | **Yes** |`);
+    rows.push(`| \`FIREBASE_PRIVATE_KEY\` | Firebase Admin SDK private key | — | **Yes** |`);
+    rows.push(`| \`FIREBASE_CLIENT_EMAIL\` | Service account email | — | **Yes** |`);
+  }
+  if (needsAuth) {
+    rows.push(`| \`JWT_SECRET\` | Secret key for signing authentication tokens | — | **Yes** |`);
+    rows.push(`| \`JWT_EXPIRES_IN\` | Token expiry duration | \`7d\` | No |`);
+  }
+  if (stack.tools.has('OAuth/Auth')) {
+    rows.push(`| \`GITHUB_CLIENT_ID\` | OAuth app client ID | — | **Yes** |`);
+    rows.push(`| \`GITHUB_CLIENT_SECRET\` | OAuth app secret | — | **Yes** |`);
+  }
+  if (stack.tools.has('Stripe')) {
+    rows.push(`| \`STRIPE_SECRET_KEY\` | Stripe API secret key | — | **Yes** |`);
+    rows.push(`| \`STRIPE_WEBHOOK_SECRET\` | Stripe webhook signing secret | — | **Yes** |`);
+  }
+  if (stack.tools.has('OpenAI API')) rows.push(`| \`OPENAI_API_KEY\` | OpenAI API key | — | **Yes** |`);
+  if (stack.tools.has('Anthropic API')) rows.push(`| \`ANTHROPIC_API_KEY\` | Anthropic API key | — | **Yes** |`);
+
+  return rows;
+}
+
+// ── Template README Builder (fallback) ───────────────────────
 function buildReadme(repoInfo, paths, fileContents) {
   const owner = repoInfo.owner.login;
   const repo = repoInfo.name;
   const projectName = getProjectName(repoInfo, fileContents);
-  const description = getDescription(repoInfo, fileContents);
   const stack = detectTechStack(paths, fileContents);
+  const projectCategory = detectProjectCategory(repoInfo, paths, fileContents, stack);
+  const description = buildSmartDescription(repoInfo, fileContents, projectCategory, stack);
   const license = detectLicense(fileContents, repoInfo);
-  const installCmds = getInstallCommands(repoInfo, fileContents, stack, paths);
-  const runCmds = getRunCommands(fileContents, stack, paths);
+  const installCmds = getInstallCommands(repoInfo, fileContents, stack);
+  const runCmds = getRunCommands(fileContents, stack);
   const testCmds = getTestCommands(fileContents, stack);
   const badges = buildBadges(repoInfo, stack, license);
+  const acks = buildAcknowledgements(stack, repoInfo);
+
   const hasDocker = paths.some(p => p === 'Dockerfile' || p.startsWith('Dockerfile.'));
   const hasDC = paths.some(p => p.includes('docker-compose'));
   const hasContrib = paths.some(p => /CONTRIBUTING/i.test(p));
+  const hasSecurity = paths.some(p => /SECURITY\.md/i.test(p));
+  const hasChangelog = paths.some(p => /CHANGELOG|HISTORY/i.test(p));
+  const hasEnvExample = paths.some(p => /\.env\.example|\.env\.sample|example\.env/i.test(p));
   const topics = repoInfo.topics || [];
 
-  // Define stack status variables
-  const isWebApp = stack.frameworks.has('React') || 
-                   stack.frameworks.has('Next.js') || 
-                   stack.frameworks.has('Vue.js') || 
-                   stack.frameworks.has('Nuxt.js') || 
-                   stack.frameworks.has('Angular') || 
-                   stack.frameworks.has('Svelte') ||
-                   stack.languages.has('HTML') ||
-                   stack.languages.has('CSS');
+  const isWebApp = ['webapp', 'fullstack'].includes(projectCategory);
+  const isBackend = ['api', 'fullstack'].includes(projectCategory);
+  const isMobile = projectCategory === 'mobile';
+  const isCLI = projectCategory === 'cli';
+  const isLibrary = projectCategory === 'library';
+  const isML = projectCategory === 'ml_ai';
 
-  const isBackend = stack.frameworks.has('Django') || 
-                    stack.frameworks.has('Flask') || 
-                    stack.frameworks.has('FastAPI') || 
-                    stack.frameworks.has('aiohttp') ||
-                    stack.frameworks.has('Express.js') ||
-                    stack.frameworks.has('Fastify') ||
-                    stack.frameworks.has('Koa') ||
-                    stack.frameworks.has('NestJS') ||
-                    stack.frameworks.has('Spring Boot') ||
-                    stack.frameworks.has('Tokio') ||
-                    stack.frameworks.has('Gin') ||
-                    stack.frameworks.has('Echo') ||
-                    stack.frameworks.has('Fiber') ||
-                    stack.runtime === 'Python' || 
-                    stack.runtime === 'Go' || 
-                    stack.runtime === 'Rust' ||
-                    stack.databases.size > 0;
-
-  const isFullStack = isWebApp && isBackend;
-
-  const isMobile = stack.frameworks.has('Flutter') ||
-                   stack.frameworks.has('React Native') ||
-                   stack.languages.has('Swift') ||
-                   stack.languages.has('Kotlin') ||
-                   paths.some(p => p.includes('android/') || p.includes('ios/'));
+  const needsEnvVars = stack.databases.size > 0 || stack.tools.has('OpenAI API') ||
+                       stack.tools.has('Anthropic API') || stack.tools.has('Stripe') ||
+                       projectUsesAuth(stack, paths);
 
   const pm = stack.packageManager || 'npm';
   const pmLower = pm.toLowerCase();
@@ -617,442 +1117,405 @@ function buildReadme(repoInfo, paths, fileContents) {
   const pmExec = pmLower === 'yarn' ? 'yarn' : (pmLower === 'pnpm' ? 'pnpm dlx' : (pmLower === 'bun' ? 'bunx' : 'npx'));
 
   let defaultPort = '3000';
-  if (stack.frameworks.has('FastAPI') || stack.frameworks.has('Flask') || stack.frameworks.has('Django')) {
-    defaultPort = '8000';
-  } else if (stack.frameworks.has('Spring Boot')) {
-    defaultPort = '8080';
-  }
+  if (stack.frameworks.has('FastAPI') || stack.frameworks.has('Flask') || stack.frameworks.has('Django')) defaultPort = '8000';
+  else if (stack.frameworks.has('Spring Boot')) defaultPort = '8080';
+
+  const emoji = getProjectEmoji(projectCategory);
 
   let md = '';
 
   // ── Title & Badges ──
   md += `<div align="center">\n\n`;
-  md += `# 🚀 ${projectName}\n\n`;
-  if (badges.length > 0) {
-    md += badges.join(' ') + '\n';
-  }
-  md += `\n**A professional, production-ready implementation built on modern patterns.**\n\n`;
-  md += `[Report Bug](https://github.com/${owner}/${repo}/issues) · [Request Feature](https://github.com/${owner}/${repo}/issues) · [Get Help](https://github.com/${owner}/${repo}/discussions)\n\n`;
-  md += `</div>\n\n---\n\n`;
-
-  // ── Description ──
-  md += `## 📖 Introduction & Overview\n\n`;
+  md += `# ${emoji} ${projectName}\n\n`;
   if (description) {
-    md += `${description}\n\n`;
-  } else {
-    md += `${projectName} is a modern, robust, and scalable project designed to address developers' needs efficiently. This repository contains the source code, documentation, and configuration files required to run, test, and deploy the application seamlessly.\n\n`;
+    md += `*${description}*\n\n`;
   }
-
-  // ── Topics ──
-  if (topics.length > 0) {
-    md += `### 🏷️ Project Keywords & Tags\n\n`;
-    md += topics.map(t => `\`${t}\``).join(' ') + '\n\n';
+  if (badges.length > 0) {
+    md += badges.join(' ') + '\n\n';
   }
+  md += `[View Demo](https://github.com/${owner}/${repo}) · [Report Bug](https://github.com/${owner}/${repo}/issues/new?labels=bug) · [Request Feature](https://github.com/${owner}/${repo}/issues/new?labels=enhancement)\n\n`;
+  md += `</div>\n\n`;
+  md += `---\n\n`;
 
   // ── Table of Contents ──
-  const tocItems = ['Features', 'Tech Stack'];
-  if (isBackend || isFullStack) tocItems.push('Architecture & Design');
+  const tocItems = [];
+  if (isWebApp || isMobile || isML) tocItems.push('Screenshots');
+  tocItems.push('Overview', 'Features', 'Tech Stack');
+  if (isBackend || projectCategory === 'fullstack') tocItems.push('Architecture');
   tocItems.push('Getting Started', 'Installation');
-  if (runCmds.length > 0) tocItems.push('Usage');
-  if (isBackend || isFullStack || isWebApp) tocItems.push('API Reference');
-  if (testCmds.length > 0) tocItems.push('Running Tests');
-  if (hasDocker || hasDC) tocItems.push('Docker & Containers');
+  if (needsEnvVars) tocItems.push('Configuration');
+  tocItems.push('Usage');
+  if (testCmds.length > 0) tocItems.push('Testing');
+  if (isBackend) tocItems.push('API Reference');
+  if (hasDocker || hasDC) tocItems.push('Docker');
+  if (isBackend || isWebApp) tocItems.push('Deployment');
   tocItems.push('Project Structure');
-  if (isBackend || isFullStack || isWebApp) tocItems.push('Deployment');
-  tocItems.push('Troubleshooting FAQ', 'Roadmap', 'Contributing', 'License');
+  if (isBackend) tocItems.push('Security');
+  tocItems.push('Roadmap', 'Contributing');
+  if (acks && acks.length > 0) tocItems.push('Acknowledgements');
+  tocItems.push('License');
 
-  md += `## 🗂️ Table of Contents\n\n`;
+  md += `## 📋 Table of Contents\n\n`;
   tocItems.forEach(item => {
-    md += `- [${item}](#${item.toLowerCase().replace(/[^a-z0-9]+/g, '-')})\n`;
+    const anchor = item.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    md += `- [${item}](#${anchor})\n`;
   });
   md += '\n---\n\n';
 
+  // ── Screenshots ──
+  if (isWebApp || isMobile || isML) {
+    md += `## 📸 Screenshots\n\n`;
+    md += `> Add screenshots here to make your README more engaging!\n\n`;
+    md += `| Home Screen | Feature Demo |\n`;
+    md += `|---|---|\n`;
+    md += `| ![Home](screenshots/home.png) | ![Feature](screenshots/feature.png) |\n\n`;
+    md += `> 📌 Drop screenshots into a \`screenshots/\` folder in the repo root and update the paths above.\n\n`;
+    md += `---\n\n`;
+  }
+
+  // ── Overview ──
+  md += `## 📖 Overview\n\n`;
+  md += `${description}\n\n`;
+  if (topics.length > 0) {
+    md += topics.map(t => `\`${t}\``).join(' ') + '\n\n';
+  }
+  if (repoInfo.homepage) {
+    md += `🔗 **Live Site:** [${repoInfo.homepage}](${repoInfo.homepage})\n\n`;
+  }
+
   // ── Features ──
-  md += `## ✨ Key Features\n\n`;
+  md += `## ✨ Features\n\n`;
   const featureSet = [];
 
   if (stack.frameworks.size > 0) {
-    featureSet.push(`**Modern Core Framework**: Built with ${Array.from(stack.frameworks).slice(0, 3).join(', ')} for stellar performance, reliability, and modern lifecycle hooks.`);
+    const fwList = Array.from(stack.frameworks).slice(0, 3).join(', ');
+    const labels = {
+      webapp: `Built with ${fwList} for a fast, reactive user experience`,
+      api: `${fwList}-powered backend for high-performance request handling`,
+      fullstack: `Full-stack architecture using ${fwList} from client to server`,
+      cli: `Ergonomic CLI experience powered by ${fwList}`,
+      library: `Clean, tree-shakeable API built on top of ${fwList}`,
+      mobile: `Cross-platform mobile app built with ${fwList}`,
+      ml_ai: `ML pipeline using ${fwList} for model training and inference`,
+      desktop: `Desktop-native experience via ${fwList}`,
+      generic: `Core powered by ${fwList}`,
+    };
+    featureSet.push(`**${labels[projectCategory] || `Built on ${fwList}`}**`);
   }
+
   if (stack.databases.size > 0) {
-    featureSet.push(`**Robust Persistent Storage**: Seamless database integration with ${Array.from(stack.databases).slice(0, 2).join(' & ')} supporting migration scripts, connection pooling, and optimized query pipelines.`);
+    const dbList = Array.from(stack.databases).slice(0, 2).join(' & ');
+    featureSet.push(`**Persistent data layer** — ${dbList} integration with efficient query patterns`);
   }
   if (stack.testing.size > 0) {
-    featureSet.push(`**High Code Coverage & Quality**: Comprehensive test suite executing unit, integration, and E2E specs using ${Array.from(stack.testing).join(', ')}.`);
+    featureSet.push(`**Tested & reliable** — ${Array.from(stack.testing).join(', ')} test suite with comprehensive coverage`);
   }
-  if (hasDocker) {
-    featureSet.push(`**Dockerized Dev & Prod**: Containerized configuration files enabling reproducible builds, multi-stage builds, and non-root execution for optimal security.`);
+  if (hasDocker) featureSet.push(`**Containerised** — Docker setup for consistent dev and production environments`);
+  if (stack.cicd.size > 0) featureSet.push(`**CI/CD pipeline** — Automated checks via ${Array.from(stack.cicd).join(', ')} on every push`);
+  if (stack.tools.has('TypeScript')) featureSet.push(`**Type-safe** — Full TypeScript coverage with strict mode enabled`);
+  if (stack.tools.has('Tailwind CSS') || stack.tools.has('shadcn/ui')) {
+    featureSet.push(`**Polished UI** — ${stack.tools.has('shadcn/ui') ? 'shadcn/ui components with ' : ''}Tailwind CSS for a consistent design system`);
   }
-  if (stack.cicd.size > 0) {
-    featureSet.push(`**Continuous Integration**: Automated testing, lint checks, and preview deployments configured through ${Array.from(stack.cicd).join(', ')}.`);
+  if (stack.tools.has('tRPC')) featureSet.push(`**End-to-end type safety** — tRPC for fully typed client-server communication`);
+  if (stack.tools.has('GraphQL')) featureSet.push(`**GraphQL API** — Schema-first data layer with typed queries and mutations`);
+  if (stack.tools.has('OpenAI API') || stack.tools.has('Anthropic API') || stack.tools.has('LangChain')) {
+    featureSet.push(`**AI-powered** — Integrates with ${stack.tools.has('OpenAI API') ? 'OpenAI' : 'Anthropic'} for intelligent features`);
   }
-  if (stack.tools.has('TypeScript')) {
-    featureSet.push(`**Type-Safe Core**: End-to-end type safety, strict compile checks, and advanced interface contracts.`);
-  }
-  if (stack.tools.has('GraphQL')) {
-    featureSet.push(`**Flexible API Schema**: Schema-first GraphQL API layer with typed queries, mutations, and resolver mapping.`);
-  }
-  if (stack.tools.has('Tailwind CSS')) {
-    featureSet.push(`**Fluid UI / Responsive Design**: Styled using utility-first classes, design tokens, responsive grid layouts, and automatic dark mode support.`);
-  }
+  if (stack.tools.has('Socket.IO')) featureSet.push(`**Real-time** — WebSocket support via Socket.IO for live updates`);
+  if (isCLI) { featureSet.push(`**Zero-config** — Works out of the box`); featureSet.push(`**Composable** — Commands are modular and can be scripted`); }
+  if (isLibrary) { featureSet.push(`**Minimal footprint** — Keeps your bundle size in check`); featureSet.push(`**Tree-shakeable** — Import only what you use`); }
+  if (isMobile) featureSet.push(`**Cross-platform** — Single codebase runs on iOS, Android${stack.frameworks.has('Flutter') ? ', and Web' : ''}`);
+  if (isML) { featureSet.push(`**Reproducible experiments** — Config-driven training with logged metrics`); }
 
-  // Generic features
-  featureSet.push(
-    `**Environment Security**: Segregated development, staging, and production environment configuration parsing via \`.env\` structures.`,
-    `**Advanced Logging & Telemetry**: Integrated logging mechanisms for auditing, debugging, and tracing runtime exceptions.`,
-    `**Clean & Modular Architecture**: Separation of concerns adhering to modular development best practices, making the codebase highly extendable.`
-  );
+  if (featureSet.length < 3) {
+    featureSet.push(`**Well-documented** — Detailed README, inline comments, and clear code structure`);
+    featureSet.push(`**Open-source** — Fork, extend, and contribute freely`);
+  }
 
   featureSet.forEach(f => { md += `- ${f}\n`; });
-  md += '\n';
+  md += '\n---\n\n';
 
   // ── Tech Stack ──
   md += `## 🛠️ Tech Stack\n\n`;
-  md += `| Category | Technologies | Purpose |\n`;
+  md += `| Category | Technology | Purpose |\n`;
   md += `| :--- | :--- | :--- |\n`;
 
-  if (stack.languages.size > 0) md += `| **Language** | ${Array.from(stack.languages).map(l => `\`${l}\``).join(', ')} | Core programming logic |\n`;
-  if (stack.frameworks.size > 0) md += `| **Framework** | ${Array.from(stack.frameworks).map(f => `\`${f}\``).join(', ')} | Application foundation & routing |\n`;
-  if (stack.tools.size > 0) md += `| **Tools & Libraries** | ${Array.from(stack.tools).map(t => `\`${t}\``).join(', ')} | Development tools, linters, and helpers |\n`;
-  if (stack.databases.size > 0) md += `| **Database** | ${Array.from(stack.databases).map(d => `\`${d}\``).join(', ')} | Persistent data storage & caching |\n`;
-  if (stack.testing.size > 0) md += `| **Testing** | ${Array.from(stack.testing).map(t => `\`${t}\``).join(', ')} | Unit, integration, and E2E test suites |\n`;
-  if (stack.cicd.size > 0) md += `| **CI/CD** | ${Array.from(stack.cicd).map(c => `\`${c}\``).join(', ')} | Automated builds and deployments |\n`;
-  if (stack.packageManager) md += `| **Package Manager** | \`${stack.packageManager}\` | Dependency resolution & script runner |\n`;
-
+  if (stack.languages.size > 0) md += `| **Language** | ${Array.from(stack.languages).map(l => `\`${l}\``).join(', ')} | Core implementation |\n`;
+  if (stack.frameworks.size > 0) md += `| **Framework** | ${Array.from(stack.frameworks).map(f => `\`${f}\``).join(', ')} | Application foundation |\n`;
+  if (stack.tools.size > 0) md += `| **Tools & Libraries** | ${Array.from(stack.tools).map(t => `\`${t}\``).join(', ')} | Developer tooling |\n`;
+  if (stack.databases.size > 0) md += `| **Database** | ${Array.from(stack.databases).map(d => `\`${d}\``).join(', ')} | Persistent storage |\n`;
+  if (stack.testing.size > 0) md += `| **Testing** | ${Array.from(stack.testing).map(t => `\`${t}\``).join(', ')} | Quality assurance |\n`;
+  if (stack.cicd.size > 0) md += `| **CI/CD** | ${Array.from(stack.cicd).map(c => `\`${c}\``).join(', ')} | Automated pipelines |\n`;
+  if (stack.packageManager) md += `| **Package Manager** | \`${stack.packageManager}\` | Dependency management |\n`;
   md += '\n---\n\n';
 
-  // ── Architecture & Design ──
-  if (isBackend || isFullStack) {
-    md += `## 🏗️ Architecture & Design Patterns\n\n`;
-    md += `This project utilizes a structured, modular design pattern to separate concerns and ensure maintainability:\n\n`;
-    md += `- **Layered Architecture**: Decouples presentation, business logic, data access, and external services.\n`;
-    md += `- **Dependency Injection / Modular Pattern**: Encapsulates code blocks into reusable modules with clear dependency resolution.\n`;
-    md += `- **Controllers & Services**: Routes delegate to thin controllers, which call heavy-duty services handling actual business logic.\n`;
-    md += `- **Middlewares & Interceptors**: Handles authentication, logging, rate-limiting, and error-handling globally.\n\n`;
-    md += `### Flow Diagram\n\n`;
-    md += `\`\`\`\n`;
-    md += `[Client Request] ──► [Routing / Router] ──► [Middlewares] ──► [Controllers] ──► [Services] ──► [Database / ORM]\n`;
-    md += `                                                                    │\n`;
-    md += `                                                                    └──► [External APIs / Services]\n`;
-    md += `\`\`\`\n\n`;
+  // ── Architecture ──
+  if (isBackend || projectCategory === 'fullstack') {
+    md += `## 🏗️ Architecture\n\n`;
+    if (projectCategory === 'fullstack') {
+      md += `This project follows a **full-stack** structure, separating frontend and backend concerns while sharing types and utilities.\n\n`;
+      md += `\`\`\`\n`;
+      md += `┌─────────────┐    HTTP/WebSocket    ┌──────────────────┐\n`;
+      md += `│   Browser   │ ◄─────────────────► │   API Server     │\n`;
+      md += `│  (${Array.from(stack.frameworks)[0] || 'Frontend'})  │                     │  (${Array.from(stack.frameworks).slice(-1)[0] || 'Backend'})    │\n`;
+      md += `└─────────────┘                     └────────┬─────────┘\n`;
+      md += `                                             │\n`;
+      md += `                                    ┌────────▼─────────┐\n`;
+      md += `                                    │     Database     │\n`;
+      md += `                                    │  (${Array.from(stack.databases)[0] || 'Storage'})    │\n`;
+      md += `                                    └──────────────────┘\n`;
+      md += `\`\`\`\n\n`;
+    } else {
+      md += `\`\`\`\n[Request] → [Router] → [Middleware] → [Controller] → [Service] → [Database]\n\`\`\`\n\n`;
+      md += `- **Router** — maps HTTP verbs and paths to controllers\n`;
+      md += `- **Middleware** — handles auth, validation, logging, rate limiting\n`;
+      md += `- **Controller** — parses input, calls services, returns responses\n`;
+      md += `- **Service** — holds business logic, pure functions, testable\n`;
+      md += `- **Repository/ORM** — abstracts database queries\n\n`;
+    }
+    md += `---\n\n`;
   }
 
   // ── Getting Started ──
-  md += `## 🚀 Getting Started\n\n`;
-  md += `Follow these step-by-step instructions to get a local copy of the project running on your machine.\n\n`;
-  md += `### Prerequisites\n\n`;
-  md += `Before proceeding, make sure your development environment has the following tools installed:\n\n`;
-
+  md += `## 🚀 Getting Started\n\n### Prerequisites\n\n`;
   const prereqs = [];
   if (fileContents['package.json']) {
-    prereqs.push(`- **Node.js** (v18.0.0 or higher recommended) — [Install Node.js](https://nodejs.org/)`);
-    if (pm === 'Yarn') prereqs.push('- **Yarn** package manager — [Install Yarn](https://yarnpkg.com/)');
-    if (pm === 'pnpm') prereqs.push('- **pnpm** package manager — [Install pnpm](https://pnpm.io/)');
-    if (pm === 'Bun') prereqs.push('- **Bun** JavaScript runtime — [Install Bun](https://bun.sh/)');
+    prereqs.push(`- **Node.js** ≥ 18.x — [nodejs.org](https://nodejs.org/)`);
+    if (pm === 'Yarn') prereqs.push('- **Yarn** — `npm install -g yarn`');
+    if (pm === 'pnpm') prereqs.push('- **pnpm** — `npm install -g pnpm`');
+    if (pm === 'Bun') prereqs.push('- **Bun** — [bun.sh](https://bun.sh/)');
   }
   if (fileContents['requirements.txt'] || fileContents['pyproject.toml'] || fileContents['setup.py']) {
-    prereqs.push('- **Python** (v3.9 or higher) — [Install Python](https://python.org/)');
-    prereqs.push('- **pip** package installer or **Virtualenv** environment tool');
+    prereqs.push('- **Python** ≥ 3.9 — [python.org](https://www.python.org/)');
+    prereqs.push('- **pip** or **pipenv** for package management');
   }
-  if (fileContents['Cargo.toml']) prereqs.push('- **Rust Toolchain** (rustc & cargo, stable channel) — [Install Rust](https://www.rust-lang.org/)');
-  if (fileContents['go.mod']) prereqs.push('- **Go Programming Language** (v1.20 or higher) — [Install Go](https://golang.org/)');
-  if (fileContents['Gemfile']) prereqs.push('- **Ruby** (v3.0 or higher) & **Bundler** — [Install Ruby](https://www.ruby-lang.org/)');
-  if (fileContents['composer.json']) prereqs.push('- **PHP** (v8.1 or higher) & **Composer** package manager — [Install PHP](https://php.net/)');
-  if (fileContents['pubspec.yaml']) prereqs.push('- **Flutter SDK** (stable channel) — [Install Flutter](https://flutter.dev/)');
-  if (hasDocker) prereqs.push('- **Docker Desktop** (or Docker engine & compose CLI) — [Install Docker](https://docker.com/)');
-
-  if (prereqs.length === 0) prereqs.push('- **Git** command-line interface installed on your host system');
+  if (fileContents['Cargo.toml']) prereqs.push('- **Rust & Cargo** (stable) — [rustup.rs](https://rustup.rs/)');
+  if (fileContents['go.mod']) prereqs.push('- **Go** ≥ 1.21 — [golang.org](https://golang.org/)');
+  if (fileContents['Gemfile']) prereqs.push('- **Ruby** ≥ 3.0 & **Bundler** — [ruby-lang.org](https://www.ruby-lang.org/)');
+  if (fileContents['composer.json']) prereqs.push('- **PHP** ≥ 8.1 & **Composer** — [getcomposer.org](https://getcomposer.org/)');
+  if (fileContents['pubspec.yaml']) prereqs.push('- **Flutter SDK** (stable) — [flutter.dev](https://flutter.dev/)');
+  if (hasDocker) prereqs.push('- **Docker** & **Docker Compose** — [docker.com](https://www.docker.com/)');
+  if (prereqs.length === 0) prereqs.push('- **Git** — [git-scm.com](https://git-scm.com/)');
   prereqs.forEach(p => { md += `${p}\n`; });
   md += '\n';
 
   // ── Installation ──
   md += `## 📥 Installation\n\n`;
-  md += `1. **Clone the Repository**\n\n`;
-  md += `\`\`\`bash\ngit clone ${repoInfo.clone_url}\ncd ${repo}\n\`\`\`\n\n`;
-
-  // Python environment setup
+  md += `**1. Clone the repository**\n\n\`\`\`bash\ngit clone ${repoInfo.clone_url}\ncd ${repo}\n\`\`\`\n\n`;
   if (fileContents['requirements.txt'] || fileContents['pyproject.toml'] || fileContents['setup.py']) {
-    md += `2. **Create and Activate a Virtual Environment** (Recommended)\n\n`;
-    md += `\`\`\`bash\n# On Windows (CMD/PowerShell)\npython -m venv venv\n.\\\\venv\\\\Scripts\\\\activate\n\n# On macOS/Linux\npython3 -m venv venv\nsource venv/bin/activate\n\`\`\`\n\n`;
-    md += `3. **Install Dependencies**\n\n`;
-    md += `\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
+    md += `**2. Create & activate a virtual environment**\n\n\`\`\`bash\npython -m venv .venv\n\n# macOS/Linux\nsource .venv/bin/activate\n\n# Windows\n.venv\\Scripts\\activate\n\`\`\`\n\n`;
+    md += `**3. Install dependencies**\n\n\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
   } else if (installCmds.length > 2) {
-    md += `2. **Install Dependencies**\n\n`;
-    md += `\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
+    md += `**2. Install dependencies**\n\n\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
   }
 
-  // Environment variables setup
-  md += `3. **Set Up Environment Variables**\n\n`;
-  const hasEnvExample = paths.some(p => /\.env\.example|\.env\.sample|example\.env/i.test(p));
-  if (hasEnvExample) {
-    md += `Copy the example environment template file and configure it with your credentials:\n\n`;
-    md += `\`\`\`bash\ncp .env.example .env\n\`\`\`\n\n`;
-    md += `> 📝 **Note**: Open the generated \`.env\` file in your text editor and fill in the missing key-value configurations.\n\n`;
-  } else {
-    md += `Create a new \`.env\` file in the root directory. This project requires configuration variables to boot up properly.\n\n`;
-  }
-
-  md += `#### Key Environment Variables\n\n`;
-  md += `| Variable | Description | Default | Required |\n`;
-  md += `| :--- | :--- | :--- | :--- |\n`;
-
-  if (isBackend || isFullStack) {
-    md += `| \`NODE_ENV\` | Target environment for runtime configs | \`development\` | No |\n`;
-    md += `| \`PORT\` | The HTTP port the server will bind to | \`${defaultPort}\` | No |\n`;
-    md += `| \`HOST\` | Binding address for networking | \`0.0.0.0\` | No |\n`;
-  }
-  if (stack.databases.has('PostgreSQL') || stack.databases.has('SQLAlchemy')) {
-    md += `| \`DATABASE_URL\` | PostgreSQL database connection string | — | **Yes** |\n`;
-    md += `| \`DB_HOST\` | Database host server | \`localhost\` | No |\n`;
-    md += `| \`DB_PORT\` | Database server port | \`5432\` | No |\n`;
-    md += `| \`DB_NAME\` | Logical database name | — | **Yes** |\n`;
-    md += `| \`DB_USER\` | Database username | — | **Yes** |\n`;
-    md += `| \`DB_PASSWORD\` | Database password | — | **Yes** |\n`;
-  }
-  if (stack.databases.has('MongoDB')) {
-    md += `| \`MONGODB_URI\` | Connection connection string | \`mongodb://localhost:27017\` | **Yes** |\n`;
-    md += `| \`MONGODB_DB_NAME\` | Logical database name | \`${repo}\` | No |\n`;
-  }
-  if (stack.databases.has('Redis')) {
-    md += `| \`REDIS_URL\` | Redis server connection URI | \`redis://localhost:6379\` | No |\n`;
-  }
-  if (stack.databases.has('Supabase')) {
-    md += `| \`SUPABASE_URL\` | Supabase API Endpoint | — | **Yes** |\n`;
-    md += `| \`SUPABASE_ANON_KEY\` | Client anonymous key | — | **Yes** |\n`;
-    md += `| \`SUPABASE_SERVICE_KEY\` | Service role administrative key | — | **Yes** |\n`;
-  }
-  if (stack.databases.has('Firebase')) {
-    md += `| \`FIREBASE_PROJECT_ID\` | Firebase Project ID | — | **Yes** |\n`;
-    md += `| \`FIREBASE_PRIVATE_KEY\` | Firebase Admin SDK Private Key | — | **Yes** |\n`;
-    md += `| \`FIREBASE_CLIENT_EMAIL\` | Service account client email | — | **Yes** |\n`;
-  }
-  if (isBackend || isFullStack) {
-    md += `| \`JWT_SECRET\` | Encryption key for signing user sessions / auth tokens | — | **Yes** |\n`;
-    md += `| \`JWT_EXPIRES_IN\` | Session lifespan | \`7d\` | No |\n`;
-    md += `| \`CORS_ORIGIN\` | Allowed domains for cross-origin resources | \`*\` | No |\n`;
-    md += `| \`LOG_LEVEL\` | Level of logs emitted to stdout (\`error\`, \`warn\`, \`info\`, \`debug\`) | \`info\` | No |\n`;
-  }
-  if (isWebApp || isFullStack) {
-    if (stack.frameworks.has('Next.js') || stack.frameworks.has('Nuxt.js') || stack.frameworks.has('Vue.js') || stack.frameworks.has('React')) {
-      md += `| \`NEXT_PUBLIC_API_URL\` | Backend server endpoint accessed by client | \`http://localhost:${defaultPort}\` | **Yes** |\n`;
+  // ── Configuration ──
+  if (needsEnvVars) {
+    md += `## ⚙️ Configuration\n\n`;
+    if (hasEnvExample) {
+      md += `Copy the example environment file and fill in your values:\n\n\`\`\`bash\ncp .env.example .env\n\`\`\`\n\n`;
+    } else {
+      md += `Create a \`.env\` file in the project root:\n\n\`\`\`bash\ntouch .env\n\`\`\`\n\n`;
     }
+    const envRows = buildEnvVarsTable(repoInfo, stack, projectCategory, paths);
+    if (envRows.length > 0) {
+      md += `| Variable | Description | Default | Required |\n`;
+      md += `| :--- | :--- | :--- | :--- |\n`;
+      envRows.forEach(r => { md += `${r}\n`; });
+      md += '\n';
+    }
+    md += `> [!WARNING]\n> Never commit your \`.env\` file. Ensure \`.env\` is listed in your \`.gitignore\`.\n\n---\n\n`;
   }
-  if (stack.tools.has('ML/AI')) {
-    md += `| \`MODEL_PATH\` | Absolute / relative path to weight binaries | \`./models/\` | **Yes** |\n`;
-    md += `| \`BATCH_SIZE\` | Evaluation batch size | \`32\` | No |\n`;
-  }
-
-  md += `\n> ⚠️ **IMPORTANT**: Never commit your \`.env\` file to Git version control. Ensure it is ignored by your \`.gitignore\` to prevent exposing production keys.\n\n`;
 
   // ── Usage ──
   md += `## ▶️ Usage\n\n`;
-  md += `Here are the key commands used to run, build, and use the project:\n\n`;
-
   if (runCmds.length > 0) {
     runCmds.forEach(({ label, cmd }) => {
-      md += `### 🛠️ ${label}\n\n\`\`\`bash\n${cmd}\n\`\`\`\n\n`;
+      md += `**${label}**\n\n\`\`\`bash\n${cmd}\n\`\`\`\n\n`;
     });
   } else {
-    md += `\`\`\`bash\n# Run the project\n${fileContents['package.json'] ? `${pmRun} start` : fileContents['Cargo.toml'] ? 'cargo run' : fileContents['go.mod'] ? 'go run .' : 'python main.py'}\n\`\`\`\n\n`;
+    md += `\`\`\`bash\n# Start the project\n${
+      fileContents['package.json'] ? `${pmRun} start` :
+      fileContents['Cargo.toml'] ? 'cargo run' :
+      fileContents['go.mod'] ? 'go run .' : 'python main.py'
+    }\n\`\`\`\n\n`;
   }
 
-  if (isWebApp || isFullStack) {
-    md += `Once launched, the frontend user interface will be available at:\n\n`;
-    md += `> 🌐 **Client Dashboard:** \`http://localhost:${defaultPort}\` (or the port output in console)\n\n`;
+  if (isWebApp || projectCategory === 'fullstack') {
+    md += `Once running, open [http://localhost:${defaultPort}](http://localhost:${defaultPort}) in your browser.\n\n`;
   }
-  if (isBackend || isFullStack) {
-    md += `The server will listen to incoming requests at:\n\n`;
-    md += `> 🔗 **REST API Server:** \`http://localhost:${defaultPort}\`${stack.tools.has('GraphQL') ? `\n> 🔗 **GraphQL Interface:** \`http://localhost:${defaultPort}/graphql\`` : ''}\n\n`;
+  if (isBackend) {
+    md += `The API will be available at \`http://localhost:${defaultPort}\`${stack.tools.has('GraphQL') ? `\n\nGraphQL playground: \`http://localhost:${defaultPort}/graphql\`` : ''}.\n\n`;
   }
-  if (isMobile && stack.frameworks.has('Flutter')) {
-    md += `\`\`\`bash\n# List connected simulator/emulator devices\nflutter devices\n\n# Run on active platform emulator\nflutter run\n\n# Build release-ready Android APK bundle\nflutter build apk --release\n\n# Build release-ready iOS application bundle\nflutter build ipa\n\`\`\`\n\n`;
+  if (isCLI) {
+    md += `\`\`\`bash\n# Show all available commands\n${repo} --help\n\n# Example usage\n${repo} [command] [flags]\n\`\`\`\n\n`;
   }
-
-  // ── API Reference ──
-  if (isBackend || isFullStack) {
-    md += `## 📡 API Reference\n\n`;
-    md += `This section documents the primary REST endpoints supported by the API service.\n\n`;
-
-    if (paths.some(p => /swagger|openapi|api-docs/i.test(p))) {
-      md += `The project has built-in support for **Swagger API docs / OpenAPI schema**. Once the server is running locally, access it at:\n\n`;
-      md += `- 📚 **Interactive Swagger UI:** \`http://localhost:${defaultPort}/docs\`\n`;
-      md += `- 📄 **JSON Schema Spec:** \`http://localhost:${defaultPort}/openapi.json\`\n\n`;
-    }
-
-    md += `### Authentication\n\n`;
-    md += `For endpoints requiring authorization, pass your bearer token in the headers:\n`;
-    md += `\`\`\`http\nAuthorization: Bearer <your-jwt-token>\n\`\`\`\n\n`;
-
-    md += `### Key REST Endpoints\n\n`;
-    md += `| Method | Endpoint | Description | Auth Required |\n`;
-    md += `| :--- | :--- | :--- | :--- |\n`;
-    md += `| \`GET\` | \`/api/v1/health\` | Diagnostic check for system status | No |\n`;
-    md += `| \`POST\` | \`/api/v1/auth/register\` | Register a new user | No |\n`;
-    md += `| \`POST\` | \`/api/v1/auth/login\` | Authenticate and obtain JWT token | No |\n`;
-    md += `| \`GET\` | \`/api/v1/users/me\` | Fetch profile data of current user | **Yes** |\n`;
-    md += `| \`GET\` | \`/api/v1/items\` | Query list of resource items (supports pagination) | No |\n`;
-    md += `| \`POST\` | \`/api/v1/items\` | Create a new item resource | **Yes** |\n`;
-    md += `| \`GET\` | \`/api/v1/items/:id\` | Fetch full details of specific item | No |\n`;
-    md += `| \`PUT\` | \`/api/v1/items/:id\` | Update fields of specific item | **Yes** |\n`;
-    md += `| \`DELETE\` | \`/api/v1/items/:id\` | Delete specific resource | **Yes** |\n\n`;
-
-    md += `### Sample Response Payload\n\n`;
-    md += `\`\`\`json\n{\n  "success": true,\n  "data": {\n    "id": "usr_92f8a1",\n    "email": "user@example.com",\n    "role": "member",\n    "createdAt": "2026-01-01T12:00:00Z"\n  },\n  "meta": {\n    "durationMs": 42\n  }\n}\n\`\`\`\n\n`;
+  if (isMobile) {
+    md += `\`\`\`bash\n# List connected devices\nflutter devices\n\n# Run on a device or emulator\nflutter run\n\`\`\`\n\n`;
   }
+  md += `---\n\n`;
 
   // ── Testing ──
   if (testCmds.length > 0) {
-    md += `## 🧪 Testing\n\n`;
-    md += `We maintain comprehensive test coverages via automated unit, integration, and E2E testing systems.\n\n`;
-    md += `### Run All Test Suites\n\n`;
-    md += `\`\`\`bash\n${testCmds.join('\n')}\n\`\`\`\n\n`;
-
+    md += `## 🧪 Testing\n\n\`\`\`bash\n${testCmds.join('\n')}\n\`\`\`\n\n`;
     if (stack.testing.has('Jest') || stack.testing.has('Vitest')) {
-      md += `### JS/TS Testing Commands\n\n`;
-      md += `\`\`\`bash\n# Run tests in hot-reloader watch mode\n${pmRun} test:watch\n\n# Generate interactive HTML code coverage report\n${pmRun} test:coverage\n\n# Execute specific test file\n${pmExec} ${stack.testing.has('Vitest') ? 'vitest' : 'jest'} path/to/spec.test.ts\n\`\`\`\n\n`;
+      md += `\`\`\`bash\n# Watch mode (during development)\n${pmRun} test:watch\n\n# Coverage report\n${pmRun} test:coverage\n\`\`\`\n\n`;
     }
     if (stack.testing.has('pytest')) {
-      md += `### Python Pytest Commands\n\n`;
-      md += `\`\`\`bash\n# Run tests with verbose output\npytest -v\n\n# Generate HTML code coverage reports\npytest --cov=src --cov-report=html\n\n# Run specific test function\npytest tests/test_endpoints.py -k "test_login"\n\`\`\`\n\n`;
+      md += `\`\`\`bash\n# Verbose output\npytest -v\n\n# With coverage\npytest --cov=. --cov-report=html\n\`\`\`\n\n`;
     }
-    if (stack.testing.has('Cypress')) {
-      md += `### Cypress E2E Commands\n\n`;
-      md += `\`\`\`bash\n# Open Cypress desktop runner GUI\n${pmExec} cypress open\n\n# Run tests headless (production environment / CI)\n${pmExec} cypress run\n\`\`\`\n\n`;
-    }
-    if (stack.testing.has('Playwright')) {
-      md += `### Playwright E2E Commands\n\n`;
-      md += `\`\`\`bash\n# Execute Playwright automation suite\n${pmExec} playwright test\n\n# Run tests with UI inspector\n${pmExec} playwright test --ui\n\`\`\`\n\n`;
-    }
+    md += `---\n\n`;
+  }
 
-    md += `### Testing Hierarchy\n\n`;
-    md += `\`\`\`\ntests/\n├── unit/             # Testing single functions and business logic\n├── integration/      # Testing database controllers and services\n└── e2e/              # Automated user journeys simulating client actions\n\`\`\`\n\n`;
+  // ── API Reference ──
+  if (isBackend) {
+    md += `## 📡 API Reference\n\n`;
+    md += `> [!NOTE]\n> The endpoints below are illustrative. Update this section with your actual routes.\n\n`;
+    if (paths.some(p => /swagger|openapi/i.test(p))) {
+      md += `Interactive docs: **Swagger UI** at \`/docs\` · **ReDoc** at \`/redoc\`\n\n`;
+    }
+    md += `### Authentication\n\n`;
+    if (projectUsesAuth(stack, paths)) {
+      md += `Most endpoints require a Bearer token:\n\n\`\`\`http\nAuthorization: Bearer <your-token>\n\`\`\`\n\n`;
+    }
+    md += `### Endpoints\n\n| Method | Endpoint | Description |\n| :--- | :--- | :--- |\n| \`GET\` | \`/health\` | Health check |\n`;
+    if (projectUsesAuth(stack, paths)) {
+      md += `| \`POST\` | \`/auth/register\` | Register a new account |\n`;
+      md += `| \`POST\` | \`/auth/login\` | Authenticate and receive a token |\n`;
+    }
+    md += `| \`GET\` | \`/api/v1/...\` | *(Replace with your actual endpoints)* |\n\n---\n\n`;
   }
 
   // ── Docker ──
   if (hasDocker || hasDC) {
-    md += `## 🐳 Docker Containerization\n\n`;
-    md += `We provide fully configured container solutions to enable zero-configuration setups.\n\n`;
-
+    md += `## 🐳 Docker\n\n`;
     if (hasDC) {
-      md += `### Bootup with Docker Compose\n\n`;
-      md += `To start all stack services (databases, servers, caches) in local environment:\n\n`;
-      md += `\`\`\`bash\n# Build images and start container logs in foreground\ndocker compose up --build\n\n# Start stack in detached background mode\ndocker compose up -d\n\n# Inspect active container logs\ndocker compose logs -f\n\n# Shutdown and tear down containers\ndocker compose down\n\`\`\`\n\n`;
+      md += `**Start all services with Docker Compose:**\n\n\`\`\`bash\ndocker compose up --build\ndocker compose up -d\ndocker compose logs -f\ndocker compose down\n\`\`\`\n\n`;
     }
-
-    md += `### Build Custom Production Image\n\n`;
-    md += `\`\`\`bash\ndocker build -t ${owner}/${repo}:latest .\n\`\`\`\n\n`;
-
-    md += `### Start Independent Container\n\n`;
-    md += `\`\`\`bash\ndocker run -d \\\n  -p ${defaultPort}:${defaultPort} \\\n  --env-file .env \\\n  --name ${repo}-container \\\n  ${owner}/${repo}:latest\n\`\`\`\n\n`;
+    md += `**Build and run standalone container:**\n\n\`\`\`bash\ndocker build -t ${owner}/${repo}:latest .\ndocker run -d -p ${defaultPort}:${defaultPort} --env-file .env ${owner}/${repo}:latest\n\`\`\`\n\n---\n\n`;
   }
 
   // ── Deployment ──
-  md += `## 🌐 Production Deployment\n\n`;
-  md += `The project is designed to run in standard containerized hosts, virtual servers, or serverless web platforms.\n\n`;
-
-  if (isWebApp || isFullStack) {
-    md += `### Frontend Deployment (Vercel & Netlify)\n\n`;
-    md += `- **Vercel**: Connect your GitHub repository to Vercel and it will automatically deploy your main branch on every commit.\n`;
-    md += `- **Netlify**: Deploy using Netlify CLI:\n`;
-    md += `  \`\`\`bash\n  npm install -g netlify-cli\n  netlify deploy --prod\n  \`\`\`\n\n`;
+  if (isBackend || isWebApp) {
+    md += `## 🌐 Deployment\n\n`;
+    if (isWebApp || projectCategory === 'fullstack') {
+      md += `### Frontend\n\n`;
+      if (stack.frameworks.has('Next.js')) {
+        md += `The easiest way to deploy is via [Vercel](https://vercel.com/) — connect your GitHub repo, and it handles builds, preview deployments, and edge functions automatically.\n\n`;
+      } else {
+        md += `- **Vercel** — zero-config, connect your repo and deploy\n`;
+        md += `- **Netlify** — \`netlify deploy --prod\`\n`;
+        md += `- **Cloudflare Pages** — excellent for static and edge-rendered apps\n\n`;
+      }
+    }
+    if (isBackend || projectCategory === 'fullstack') {
+      md += `### Backend\n\n`;
+      md += `| Platform | Notes |\n| :--- | :--- |\n`;
+      md += `| **Railway** | Link your repo, add env vars — Railway auto-detects the runtime |\n`;
+      md += `| **Render** | Create a Web Service, set build & start commands |\n`;
+      md += `| **Fly.io** | \`fly launch\` then \`fly deploy\` for container-based deploys |\n`;
+      md += `| **AWS / GCP / Azure** | Containerised deploys via ECS, Cloud Run, or AKS |\n\n`;
+    }
+    md += `---\n\n`;
   }
-
-  if (isBackend || isFullStack) {
-    md += `### Cloud Backend Hosts\n\n`;
-    md += `- **Render**: Create a new Web Service on Render, connect your Git repo, set the runtime language, and add the build script and start commands.\n`;
-    md += `- **Railway**: Link your repository on [Railway](https://railway.app) dashboard and configure the environment variables. Railway handles build steps automatically.\n\n`;
-  }
-
-  md += `### Standard Platforms & Serverless Guides\n\n`;
-  md += `| Provider | Setup Resource |\n`;
-  md += `| :--- | :--- |\n`;
-  md += `| **AWS Elastic Beanstalk** | [Deploying Node/Python Web Services on AWS](https://docs.aws.amazon.com/elasticbeanstalk/) |\n`;
-  md += `| **Google Cloud Run** | [Serverless Deployments for Docker Containers](https://cloud.google.com/run/docs) |\n`;
-  md += `| **DigitalOcean App Platform** | [Quickstart Guides for App Platform](https://docs.digitalocean.com/products/app-platform/) |\n\n`;
 
   // ── Project Structure ──
   const tree = buildDirectoryTree(paths, 3);
   if (tree) {
-    md += `## 📂 Directory Structure\n\n`;
-    md += `Below is a structural directory layout of the primary project files:\n\n`;
-    md += `${tree}\n\n`;
-    md += `#### Key Directories Explained\n\n`;
-    md += `| Folder | Description |\n`;
-    md += `| :--- | :--- | \n`;
-    md += `| \`src/\` or \`lib/\` | Core application source code files |\n`;
-    md += `| \`tests/\` or \`__tests__/\` | Unit, integration, and E2E test suites |\n`;
-    md += `| \`config/\` | Configuration handlers, environment loaders, constants |\n`;
-    if (isWebApp || isFullStack) {
-      md += `| \`components/\` | Reusable user-interface visual components |\n`;
-      md += `| \`public/\` | Static assets, logo files, and favicon files |\n`;
-    }
-    if (isBackend || isFullStack) {
-      md += `| \`controllers/\` | Request entry orchestrators validating input payloads |\n`;
-      md += `| \`models/\` | Database entities, schema validation tables, and queries |\n`;
-      md += `| \`routes/\` | Endpoint pathway mappings linking verbs to controllers |\n`;
-    }
-    md += `\n---\n\n`;
+    md += `## 📂 Project Structure\n\n${tree}\n\n---\n\n`;
   }
 
-  // ── Troubleshooting FAQ ──
-  md += `## ❓ Troubleshooting & FAQ\n\n`;
-  md += `**Q: I receive a \`Port already in use\` exception on application boot.**\n`;
-  md += `> **A**: The default port (e.g. ${defaultPort}) is likely occupied by another local service. Open your \`.env\` file and update the \`PORT\` variable to an unoccupied port (e.g. \`3005\` or \`8085\`).\n\n`;
-  md += `**Q: Database connection errors or authentication failures occur during initialization.**\n`;
-  md += `> **A**: Verify that your database server instance (e.g., PostgreSQL, MongoDB) is running locally or is accessible online. Double check the username, password, host, and port configurations in your \`.env\` file.\n\n`;
-  md += `**Q: Missing dependencies or compile errors occur after pulling updates.**\n`;
-  md += `> **A**: Run the package installation command corresponding to your environment (e.g. \`${fileContents['package.json'] ? `${pm} install` : `pip install -r requirements.txt`}\`) to sync any new requirements.\n\n`;
-  md += `\n---\n\n`;
+  // ── Security ──
+  if (isBackend || projectCategory === 'fullstack') {
+    md += `## 🔒 Security\n\n`;
+    if (hasSecurity) {
+      md += `Please read our [Security Policy](./SECURITY.md) for details on reporting vulnerabilities.\n\n`;
+    } else {
+      md += `If you discover a security vulnerability, please **do not** open a public issue. Instead, use [GitHub's private vulnerability reporting](https://github.com/${owner}/${repo}/security/advisories/new).\n\n`;
+    }
+    md += `---\n\n`;
+  }
 
   // ── Roadmap ──
-  md += `## 🗺️ Project Roadmap\n\n`;
-  md += `- [x] **v1.0.0** — Release core functional specifications & base architectures.\n`;
-  md += `- [ ] **v1.1.0** — Implement robust server-side caching (e.g., Redis layer).\n`;
-  md += `- [ ] **v1.2.0** — Integrate OAuth 2.0 third-party authentication (Google/GitHub/Apple).\n`;
-  md += `- [ ] **v2.0.0** — Perform platform localization & comprehensive internationalization (i18n).\n\n`;
-  md += `\n---\n\n`;
+  md += `## 🗺️ Roadmap\n\n`;
+  const roadmapItems = ['- [x] Initial release'];
+  if (isWebApp || projectCategory === 'fullstack') {
+    if (!projectUsesAuth(stack, paths)) roadmapItems.push('- [ ] User authentication & account management');
+    roadmapItems.push('- [ ] Dark/light mode toggle');
+    roadmapItems.push('- [ ] Accessibility (WCAG 2.1 AA) audit and fixes');
+    roadmapItems.push('- [ ] Internationalisation (i18n) support');
+  }
+  if (isBackend || projectCategory === 'fullstack') {
+    if (!stack.databases.has('Redis')) roadmapItems.push('- [ ] API response caching with Redis');
+    roadmapItems.push('- [ ] Rate limiting and abuse protection');
+    roadmapItems.push('- [ ] OpenAPI / Swagger documentation');
+  }
+  if (isCLI) {
+    roadmapItems.push('- [ ] Shell completions (bash, zsh, fish)');
+    roadmapItems.push('- [ ] Plugin system for extending functionality');
+  }
+  if (testCmds.length === 0) roadmapItems.push('- [ ] Test suite with >80% coverage');
+  if (!stack.cicd.has('GitHub Actions')) roadmapItems.push('- [ ] CI/CD pipeline with GitHub Actions');
+
+  roadmapItems.slice(0, 8).forEach(item => { md += `${item}\n`; });
+  md += `\nSee [open issues](https://github.com/${owner}/${repo}/issues) for a full list of proposed features and known bugs.\n\n---\n\n`;
 
   // ── Contributing ──
   md += `## 🤝 Contributing\n\n`;
-  md += `Contributions are always welcome! Here's how you can help:\n\n`;
+  md += `Contributions make the open-source community a better place — thank you!\n\n`;
   md += `1. **Fork** the repository\n`;
-  md += `2. **Create** a feature branch: \`git checkout -b feature/amazing-feature\`\n`;
-  md += `3. **Commit** your changes: \`git commit -m 'Add some amazing feature'\`\n`;
-  md += `4. **Push** to the branch: \`git push origin feature/amazing-feature\`\n`;
-  md += `5. **Open** a Pull Request\n\n`;
+  md += `2. **Create** a feature branch — \`git checkout -b feat/your-feature-name\`\n`;
+  md += `3. **Commit** your changes — \`git commit -m 'feat: add your feature'\`\n`;
+  md += `4. **Push** to the branch — \`git push origin feat/your-feature-name\`\n`;
+  md += `5. **Open** a Pull Request and describe what you've done\n\n`;
   if (hasContrib) {
-    md += `Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed guidelines.\n\n`;
+    md += `Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for full guidelines.\n\n`;
   }
-  md += `> 💡 Make sure to update tests as appropriate and follow the existing code style.\n\n`;
+  if (stack.tools.has('TypeScript') || fileContents['.eslintrc.js'] || fileContents['.eslintrc.json']) {
+    md += `> [!TIP]\n> Run \`${pmRun} lint\` and \`${pmRun} type-check\` before submitting your PR to catch issues early.\n\n`;
+  }
+  md += `---\n\n`;
+
+  // ── Changelog ──
+  if (hasChangelog) {
+    md += `## 📝 Changelog\n\nAll notable changes are documented in [CHANGELOG.md](./CHANGELOG.md).\n\n---\n\n`;
+  }
+
+  // ── Acknowledgements ──
+  if (acks && acks.length > 0) {
+    md += `## 🙏 Acknowledgements\n\nThis project is built on top of excellent open-source work:\n\n`;
+    acks.forEach(a => { md += `- ${a}\n`; });
+    md += '\n---\n\n';
+  }
 
   // ── License ──
   md += `## 📄 License\n\n`;
   if (license && license !== 'NOASSERTION') {
-    md += `This project is licensed under the **${license} License**. See the [LICENSE](./LICENSE) file for details.\n\n`;
+    md += `Distributed under the **${license} License**. See [\`LICENSE\`](./LICENSE) for more information.\n\n`;
   } else {
-    md += `This project is currently not licensed. Please contact the maintainer for usage rights.\n\n`;
+    md += `This project does not currently specify a license. Contact the author for usage permissions.\n\n`;
   }
 
-  // ── Footer ──
   md += `---\n\n`;
-  md += `<div align="center">\n\n`;
-  md += `Made with ❤️ by [${owner}](https://github.com/${owner}) &nbsp;·&nbsp; `;
-  md += `⭐ Star this repo if you find it helpful!\n\n`;
-  md += `</div>\n`;
+  md += `<div align="center">\n\nMade with ❤️ by [${owner}](https://github.com/${owner})\n\n`;
+  md += `⭐ **If this project helped you, please give it a star!**\n\n</div>\n`;
 
   return md;
 }
 
-// ── Markdown to HTML renderer (lightweight) ─────────────────
+// ── Markdown to HTML renderer ─────────────────────────────────
 function renderMarkdown(md) {
   let html = escapeForRendering(md);
 
   // Headings
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>');
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
-  // Code blocks
+  // Code blocks (before inline code)
   html = html.replace(/```(\w*)\n([\s\S]*?)```/gm, (_, lang, code) => {
     const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
     return `<pre>${langLabel}<code>${code.trimEnd()}</code></pre>`;
@@ -1061,16 +1524,32 @@ function renderMarkdown(md) {
   // Inline code
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
+  // GitHub Alerts
+  html = html.replace(/^&gt; \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\n&gt; (.+)$/gm, (_, type, content) => {
+    const typeMap = {
+      NOTE: { icon: 'ℹ️', cls: 'alert-note' },
+      TIP: { icon: '💡', cls: 'alert-tip' },
+      IMPORTANT: { icon: '📌', cls: 'alert-important' },
+      WARNING: { icon: '⚠️', cls: 'alert-warning' },
+      CAUTION: { icon: '🚨', cls: 'alert-caution' },
+    };
+    const t = typeMap[type] || typeMap.NOTE;
+    return `<div class="gh-alert ${t.cls}"><span class="alert-icon">${t.icon}</span><span>${type}</span><p>${content}</p></div>`;
+  });
+
   // Bold & Italic
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
+  // Strikethrough
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+
   // Horizontal rule
   html = html.replace(/^---$/gm, '<hr>');
 
   // Blockquote
-  html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
 
   // Images (badges)
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="badge-img" loading="lazy" />');
@@ -1098,29 +1577,35 @@ function renderMarkdown(md) {
     }
   );
 
-  // Lists
+  // Task lists
+  html = html.replace(/^(\s*)- \[x\] (.+)$/gm, '$1<li class="task-item done"><span class="task-check checked">✓</span>$2</li>');
+  html = html.replace(/^(\s*)- \[ \] (.+)$/gm, '$1<li class="task-item"><span class="task-check">○</span>$2</li>');
+
+  // Regular lists
   html = html.replace(/^(\s*)([-*+]) (.+)$/gm, '$1<li-ul>$3</li-ul>');
   html = html.replace(/^(\s*)(\d+)\. (.+)$/gm, '$1<li-ol>$3</li-ol>');
   html = html.replace(/(<li-ul>.*<\/li-ul>(\n)?)+/g, m => `<ul>${m.replace(/<li-ul>/g, '<li>').replace(/<\/li-ul>/g, '</li>')}</ul>`);
   html = html.replace(/(<li-ol>.*<\/li-ol>(\n)?)+/g, m => `<ol>${m.replace(/<li-ol>/g, '<li>').replace(/<\/li-ol>/g, '</li>')}</ol>`);
 
+  // Task list groups
+  html = html.replace(/(<li class="task-item[^"]*">.*<\/li>(\n)?)+/g, m => `<ul class="task-list">${m}</ul>`);
+
   // div align
   html = html.replace(/<div align="center">([\s\S]*?)<\/div>/gm, '<div style="text-align:center">$1</div>');
 
-  // Paragraphs (lines not already in tags)
+  // Paragraphs
   html = html.replace(/^(?!<[a-z]|$)(.+)$/gm, '<p>$1</p>');
 
-  // Badge rows (consecutive img tags on same paragraph)
+  // Badge rows
   html = html.replace(/<p>(<img[^>]+>(\s*<img[^>]+>)*)\s*<\/p>/g, '<div class="badge-row">$1</div>');
 
-  // Clean up blank lines
+  // Clean up
   html = html.replace(/\n{3,}/g, '\n\n');
 
   return html;
 }
 
 function escapeForRendering(md) {
-  // We preserve markdown syntax but escape HTML entities in non-code parts
   return md
     .replace(/&(?!(amp|lt|gt|quot|#);)/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -1132,30 +1617,39 @@ function showLoading() {
   hideAll();
   loadingState.classList.remove('hidden');
   generateBtn.disabled = true;
-  // Reset steps
-  ['step1','step2','step3','step4'].forEach(id => {
+  generateBtn.classList.add('loading');
+  ['step1','step2','step3','step4','step5'].forEach(id => {
     const el = document.getElementById(id);
+    if (!el) return;
     el.classList.remove('active', 'done');
-    el.querySelector('.step-dot').classList.remove('active', 'done');
+    const dot = el.querySelector('.step-dot');
+    if (dot) dot.classList.remove('active', 'done');
   });
-  setStep(1);
+  setStep(1, 10);
 }
 
-function setStep(n) {
+function setStep(n, progress) {
   for (let i = 1; i < n; i++) {
     const el = document.getElementById(`step${i}`);
+    if (!el) continue;
     el.classList.add('done');
     el.classList.remove('active');
-    el.querySelector('.step-dot').classList.remove('active');
-    el.querySelector('.step-dot').classList.add('done');
+    const dot = el.querySelector('.step-dot');
+    if (dot) { dot.classList.remove('active'); dot.classList.add('done'); }
   }
   const el = document.getElementById(`step${n}`);
   if (el) {
     el.classList.add('active');
-    el.querySelector('.step-dot').classList.add('active');
+    const dot = el.querySelector('.step-dot');
+    if (dot) dot.classList.add('active');
   }
-  const labels = ['', 'Fetching repository info', 'Scanning file structure', 'Reading key files', 'Generating README...'];
-  document.getElementById('loadingStep').textContent = labels[n] || '';
+
+  const bar = document.getElementById('loadingBar');
+  if (bar && progress != null) bar.style.width = `${progress}%`;
+
+  const labels = ['', 'Fetching repository info', 'Scanning file structure', 'Reading key files', 'Generating README…', 'Finalising output'];
+  const stepEl = document.getElementById('loadingStep');
+  if (stepEl) stepEl.textContent = labels[n] || '';
 }
 
 function showError(msg) {
@@ -1163,48 +1657,106 @@ function showError(msg) {
   errorState.classList.remove('hidden');
   errorMessage.textContent = msg;
   generateBtn.disabled = false;
+  generateBtn.classList.remove('loading');
 }
 
 function showResult(info, markdown) {
   hideAll();
   resultSection.classList.remove('hidden');
   generateBtn.disabled = false;
+  generateBtn.classList.remove('loading');
 
-  // Stats bar
+  buildStatsBar(info);
+  buildOutlinePanel(markdown);
+
+  document.getElementById('markdownPreview').innerHTML = renderMarkdown(markdown);
+  document.getElementById('rawMarkdown').textContent = markdown;
+
+  resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function buildStatsBar(info) {
   const statsBar = document.getElementById('repoStatsBar');
   const lang = info.language || '';
   const stars = formatNum(info.stargazers_count);
   const forks = formatNum(info.forks_count);
-  const watchers = formatNum(info.watchers_count);
-  const updatedAt = new Date(info.updated_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  const updatedAt = new Date(info.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const size = info.size > 1024 ? (info.size / 1024).toFixed(1) + ' MB' : info.size + ' KB';
 
   statsBar.innerHTML = `
-    <div class="stat-item">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
-      <strong>${info.full_name}</strong>
+    <div class="stat-repo-info">
+      <a href="${info.html_url}" target="_blank" rel="noopener" class="stat-repo-name">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+        ${info.full_name}
+      </a>
+      ${info.description ? `<span class="stat-repo-desc">${info.description}</span>` : ''}
     </div>
-    ${lang ? `<div class="stat-separator"></div><div class="stat-item"><span class="stat-badge">${lang}</span></div>` : ''}
-    <div class="stat-separator"></div>
-    <div class="stat-item">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
-      ${stars}
+    <div class="stat-chips">
+      ${lang ? `<div class="stat-chip"><span class="lang-dot" style="background:${getLangColor(lang)}"></span>${lang}</div>` : ''}
+      <div class="stat-chip">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+        ${stars}
+      </div>
+      <div class="stat-chip">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 3.314-2.686 6-6 6-3.314 0-6-2.686-6-6V9"/></svg>
+        ${forks}
+      </div>
+      <div class="stat-chip">Updated ${updatedAt}</div>
+      <div class="stat-chip">${size}</div>
     </div>
-    <div class="stat-item">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 3.314-2.686 6-6 6-3.314 0-6-2.686-6-6V9"/></svg>
-      ${forks} forks
-    </div>
-    <div class="stat-item">Updated ${updatedAt}</div>
-    <a href="${info.html_url}" target="_blank" rel="noopener" class="repo-link">
-      View on GitHub ↗
-    </a>
   `;
+}
 
-  // Render markdown preview
-  document.getElementById('markdownPreview').innerHTML = renderMarkdown(markdown);
-  document.getElementById('rawMarkdown').textContent = markdown;
+function getLangColor(lang) {
+  const colors = {
+    JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', HTML: '#e34c26',
+    CSS: '#563d7c', Rust: '#dea584', Go: '#00ADD8', Java: '#b07219', Kotlin: '#F18E33',
+    'C#': '#178600', 'C++': '#f34b7d', Ruby: '#701516', Swift: '#F05138', PHP: '#4F5D95',
+    Dart: '#00B4AB', Shell: '#89e051', Vue: '#41b883', Svelte: '#ff3e00',
+  };
+  return colors[lang] || '#8b949e';
+}
 
-  // Scroll to result
-  resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+function buildOutlinePanel(markdown) {
+  const outlineEl = document.getElementById('outlinePanel');
+  if (!outlineEl) return;
+
+  const headings = [];
+  markdown.split('\n').forEach(line => {
+    const m = line.match(/^(#{2,3}) (.+)$/);
+    if (m) {
+      const level = m[1].length;
+      const text = m[2].replace(/[*_`]/g, '').replace(/:[a-z_]+:/g, '').trim();
+      headings.push({ level, text });
+    }
+  });
+
+  if (headings.length < 3) { outlineEl.style.display = 'none'; return; }
+
+  outlineEl.style.display = 'block';
+  outlineEl.innerHTML = `
+    <div class="outline-title">On this page</div>
+    <nav class="outline-nav">
+      ${headings.map(h => `
+        <a class="outline-link level-${h.level}" href="#" onclick="scrollToHeading(event, '${h.text.replace(/'/g, "\\'")}')">
+          ${h.text}
+        </a>
+      `).join('')}
+    </nav>
+  `;
+}
+
+function scrollToHeading(e, text) {
+  e.preventDefault();
+  const preview = document.getElementById('markdownPreview');
+  if (!preview) return;
+  const headings = preview.querySelectorAll('h1, h2, h3, h4');
+  for (const el of headings) {
+    if (el.textContent.trim().toLowerCase().includes(text.toLowerCase().substring(0, 20))) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      break;
+    }
+  }
 }
 
 function hideAll() {
@@ -1218,24 +1770,47 @@ function resetUI() {
   currentMarkdown = '';
   repoData = null;
   generateBtn.disabled = false;
+  generateBtn.classList.remove('loading');
   repoUrlInput.focus();
+  if (isSplitView) toggleSplitView();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function switchTab(tab) {
-  const previewTab = document.getElementById('previewTab');
-  const rawTab = document.getElementById('rawTab');
+  const ptab = document.getElementById('previewTab');
+  const rtab = document.getElementById('rawTab');
 
   if (tab === 'preview') {
-    previewTab.classList.add('active');
-    rawTab.classList.remove('active');
+    ptab.classList.add('active');
+    rtab.classList.remove('active');
     previewPane.classList.remove('hidden');
     rawPane.classList.add('hidden');
   } else {
-    rawTab.classList.add('active');
-    previewTab.classList.remove('active');
+    rtab.classList.add('active');
+    ptab.classList.remove('active');
     rawPane.classList.remove('hidden');
     previewPane.classList.add('hidden');
+    if (isSplitView) toggleSplitView();
+  }
+}
+
+function toggleSplitView() {
+  const resultEl = document.getElementById('resultSection');
+  const splitBtn = document.getElementById('splitViewBtn');
+  isSplitView = !isSplitView;
+
+  if (isSplitView) {
+    resultEl.classList.add('split-active');
+    previewPane.classList.remove('hidden');
+    rawPane.classList.remove('hidden');
+    document.getElementById('previewTab').classList.add('active');
+    document.getElementById('rawTab').classList.remove('active');
+    if (splitBtn) { splitBtn.classList.add('active'); splitBtn.title = 'Exit split view'; }
+  } else {
+    resultEl.classList.remove('split-active');
+    rawPane.classList.add('hidden');
+    previewPane.classList.remove('hidden');
+    if (splitBtn) { splitBtn.classList.remove('active'); splitBtn.title = 'Split view'; }
   }
 }
 
@@ -1245,17 +1820,12 @@ async function copyMarkdown() {
   try {
     await navigator.clipboard.writeText(currentMarkdown);
     btn.classList.add('copied');
-    btn.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-      Copied!`;
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!`;
     setTimeout(() => {
       btn.classList.remove('copied');
-      btn.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-        Copy`;
+      btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`;
     }, 2500);
   } catch {
-    // Fallback
     const ta = document.createElement('textarea');
     ta.value = currentMarkdown;
     document.body.appendChild(ta);
@@ -1280,14 +1850,15 @@ function downloadMarkdown() {
 
 function formatNum(n) {
   if (!n && n !== 0) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
   return n.toString();
 }
 
 function formatApiError(err) {
   if (err.status === 404) return 'Repository not found. Make sure the URL is correct and the repository is public.';
-  if (err.status === 403) return 'GitHub API rate limit exceeded (60 requests/hour for unauthenticated users). Please wait a few minutes and try again.';
-  if (err.status === 451) return 'This repository is unavailable due to a legal reason.';
+  if (err.status === 403) return 'GitHub API rate limit reached (60 req/hr for unauthenticated users). Please wait a few minutes and try again.';
+  if (err.status === 451) return 'This repository is unavailable due to a legal reason (DMCA takedown).';
   if (err.message?.includes('NetworkError') || err.message?.includes('Failed to fetch')) {
     return 'Network error. Please check your internet connection and try again.';
   }
@@ -1295,32 +1866,11 @@ function formatApiError(err) {
 }
 
 function shake(el) {
-  el.style.animation = 'none';
-  el.offsetHeight; // reflow
-  el.style.animation = 'shake 0.4s ease';
-  setTimeout(() => { el.style.animation = ''; }, 400);
+  if (!el) return;
+  el.classList.remove('shake');
+  void el.offsetWidth;
+  el.classList.add('shake');
+  setTimeout(() => el.classList.remove('shake'), 400);
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// Inject shake keyframes
-const shakeStyle = document.createElement('style');
-shakeStyle.textContent = `
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20%       { transform: translateX(-8px); }
-  40%       { transform: translateX(8px); }
-  60%       { transform: translateX(-5px); }
-  80%       { transform: translateX(5px); }
-}
-.code-lang {
-  display: block;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
-  margin-bottom: 0.5rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-`;
-document.head.appendChild(shakeStyle);
