@@ -87,14 +87,14 @@
     <section class="hero animate-in">
       <div class="hero-eyebrow">
         <span class="eyebrow-dot"></span>
-        GitHub API + Gemini AI
+        GitHub API + Code Analysis
       </div>
       <h1 class="hero-title">
         Generate a perfect<br>
         <em>README.md</em> instantly
       </h1>
       <p class="hero-subtitle">
-        Paste any public GitHub repo URL. ReadmeForge analyses the codebase, detects the tech stack, and writes a comprehensive, professional README in seconds.
+        Paste any public GitHub repo URL. ReadmeForge reads the actual source code, detects the tech stack, and writes a comprehensive, detailed README — no API key required.
       </p>
     </section>
 
@@ -129,7 +129,7 @@
           &nbsp;&middot;&nbsp;
           <span class="ai-badge" id="aiBadge">
             <span class="ai-badge-dot"></span>
-            AI Mode
+            AI Enhanced
           </span>
         </div>
       </div>
@@ -163,7 +163,7 @@
         <div class="info-sep"></div>
         <div class="info-item">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-          <span id="modeIndicator">Template mode (no API key)</span>
+          <span id="modeIndicator">Code-aware mode — reads actual source files</span>
         </div>
       </div>
     </div>
@@ -189,11 +189,11 @@
         </div>
         <div class="step-item" id="step2" role="listitem">
           <div class="step-dot" aria-hidden="true"></div>
-          <span>Scanning file structure</span>
+          <span>Scanning file structure &amp; source code</span>
         </div>
         <div class="step-item" id="step3" role="listitem">
           <div class="step-dot" aria-hidden="true"></div>
-          <span>Reading key config files</span>
+          <span>Reading config &amp; entry point files</span>
         </div>
         <div class="step-item" id="step4" role="listitem">
           <div class="step-dot" aria-hidden="true"></div>
@@ -295,21 +295,21 @@
         <div class="step-number-badge">01</div>
         <div class="step-content">
           <h3>Paste a GitHub URL</h3>
-          <p>Enter the URL of any public GitHub repository. No tokens, no sign-in, no setup required. Optionally add your Gemini API key for AI-powered generation.</p>
+          <p>Enter the URL of any public GitHub repository. No tokens, no sign-in, no setup required. Optionally add your Gemini API key via the settings gear for AI-powered generation.</p>
         </div>
       </div>
       <div class="step-row">
         <div class="step-number-badge">02</div>
         <div class="step-content">
-          <h3>Repository analysis</h3>
-          <p>ReadmeForge fetches the repo's file tree, metadata, and key config files (package.json, requirements.txt, Cargo.toml, go.mod, and more) via the GitHub API.</p>
+          <h3>Deep repository analysis</h3>
+          <p>ReadmeForge fetches the repo's file tree, metadata, config files (package.json, requirements.txt, Cargo.toml…) <strong>and actual source code entry points</strong> (main.py, index.ts, app.js…) via the GitHub API.</p>
         </div>
       </div>
       <div class="step-row">
         <div class="step-number-badge">03</div>
         <div class="step-content">
-          <h3>AI-powered generation</h3>
-          <p>If a Gemini API key is configured, the full context is sent to Gemini Flash which writes a genuine, contextual README — not a template. Without a key, a smart template system is used as fallback.</p>
+          <h3>Code-aware README generation</h3>
+          <p>ReadmeForge parses functions, classes, API routes, and imports from your source code to generate accurate, specific content — not generic filler. If a Gemini API key is set, Gemini Flash writes an even richer README.</p>
         </div>
       </div>
       <div class="step-row">
@@ -327,7 +327,7 @@
       <div class="footer-left">
         <span class="footer-logo-text">ReadmeForge</span>
         <span class="footer-logo-sep">—</span>
-        <span class="footer-meta">Powered by GitHub API + Gemini Flash · No data stored · Client-side only</span>
+        <span class="footer-meta">Powered by GitHub API · No API key needed · Client-side only</span>
       </div>
       <div class="footer-links">
         <a href="#" class="footer-link" onclick="window.scrollTo({top:0,behavior:'smooth'});return false;">↑ Top</a>
@@ -337,6 +337,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

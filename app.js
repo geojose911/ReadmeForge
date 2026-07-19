@@ -65,14 +65,10 @@ function updateModeIndicator() {
   const hasKey = !!getApiKey();
   if (hasKey) {
     el.textContent = 'AI mode active (Gemini Flash)';
-    if (badge) {
-      badge.style.display = 'inline-flex';
-    }
+    if (badge) badge.style.display = 'inline-flex';
   } else {
-    el.textContent = 'Template mode — add Gemini API key for AI';
-    if (badge) {
-      badge.style.opacity = '0.4';
-    }
+    el.textContent = 'Code-aware mode — reads actual source files';
+    if (badge) badge.style.opacity = '0.4';
   }
 }
 
@@ -165,31 +161,37 @@ async function generateReadme(owner, repo) {
   showLoading();
 
   try {
-    setStep(1, 25);
+    setStep(1, 20);
     const repoInfo = await fetchJSON(`https://api.github.com/repos/${owner}/${repo}`);
 
-    setStep(2, 45);
+    setStep(2, 38);
     const treeData = await fetchFileTree(owner, repo, repoInfo.default_branch || 'main');
 
-    setStep(3, 65);
-    const fileContents = await readKeyFiles(owner, repo, repoInfo.default_branch || 'main', treeData);
+    setStep(3, 58);
+    // Read config files AND source code entry points in parallel
+    const [fileContents, sourceFiles] = await Promise.all([
+      readKeyFiles(owner, repo, repoInfo.default_branch || 'main', treeData),
+      readSourceFiles(owner, repo, repoInfo.default_branch || 'main', treeData),
+    ]);
 
-    setStep(4, 80);
+    // Extract code insights from source files
+    const codeInsights = extractCodeInsights(sourceFiles);
+
+    setStep(4, 78);
 
     let markdown;
     const apiKey = getApiKey();
 
     if (apiKey) {
-      // Try AI generation
+      // Try AI generation with full context including source code
       try {
-        markdown = await generateWithGemini(repoInfo, treeData, fileContents, apiKey);
+        markdown = await generateWithGemini(repoInfo, treeData, fileContents, sourceFiles, codeInsights, apiKey);
       } catch (aiErr) {
         console.warn('Gemini AI generation failed, falling back to template:', aiErr.message);
-        // Fallback silently to template
-        markdown = buildReadme(repoInfo, treeData, fileContents);
+        markdown = buildReadme(repoInfo, treeData, fileContents, codeInsights);
       }
     } else {
-      markdown = buildReadme(repoInfo, treeData, fileContents);
+      markdown = buildReadme(repoInfo, treeData, fileContents, codeInsights);
     }
 
     setStep(5, 100);
@@ -206,7 +208,7 @@ async function generateReadme(owner, repo) {
 }
 
 // ── Gemini AI Integration ───────────────────────────────────
-async function generateWithGemini(repoInfo, paths, fileContents, apiKey) {
+async function generateWithGemini(repoInfo, paths, fileContents, sourceFiles, codeInsights, apiKey) {
   const owner = repoInfo.owner.login;
   const repo = repoInfo.name;
   const stack = detectTechStack(paths, fileContents);
@@ -215,10 +217,24 @@ async function generateWithGemini(repoInfo, paths, fileContents, apiKey) {
   const badges = buildBadges(repoInfo, stack, license);
 
   // Compose a rich context for the AI
-  const fileList = paths.slice(0, 80).join('\n');
+  const fileList = paths.slice(0, 100).join('\n');
   const keyFileSummary = Object.entries(fileContents)
     .map(([name, content]) => `### ${name}\n\`\`\`\n${content.slice(0, 1500)}\n\`\`\``)
     .join('\n\n');
+
+  // Source code snippets — limited to keep token budget lean
+  const sourceSummary = Object.entries(sourceFiles)
+    .map(([name, content]) => `### ${name}\n\`\`\`\n${content.slice(0, 2000)}\n\`\`\``)
+    .join('\n\n');
+
+  // Code insights summary
+  const insightsSummary = [
+    codeInsights.description ? `Extracted description: "${codeInsights.description}"` : '',
+    codeInsights.classes.length ? `Classes found: ${codeInsights.classes.join(', ')}` : '',
+    codeInsights.functions.length ? `Key functions: ${codeInsights.functions.slice(0, 12).join(', ')}` : '',
+    codeInsights.routes.length ? `API routes detected: ${codeInsights.routes.join(', ')}` : '',
+    codeInsights.imports.length ? `External imports: ${codeInsights.imports.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
 
   const stackSummary = [
     stack.languages.size ? `Languages: ${[...stack.languages].join(', ')}` : '',
@@ -260,11 +276,17 @@ Your goal is to produce a genuinely helpful, accurate, and well-structured READM
 ## Detected Tech Stack
 ${stackSummary || 'Could not detect specific stack'}
 
-## File Structure (top 80 files)
+## File Structure (top 100 files)
 ${fileList}
 
 ## Key Configuration Files
 ${keyFileSummary || 'None found'}
+
+## Source Code Entry Points
+${sourceSummary || 'None found'}
+
+## Code Insights (auto-extracted)
+${insightsSummary || 'Could not extract insights'}
 
 ## Pre-computed Data
 **Shields.io Badges (include these exactly):**
@@ -302,15 +324,17 @@ Write a complete, production-quality README.md in **GitHub Flavored Markdown**. 
 
 4. **Features** — 5–7 specific bullet points drawn from the actual tech stack and file structure. Format: \`- **Bold title** — explanation\`. Reference real technologies detected.
 
-5. **Tech Stack** — A markdown table with columns: Category | Technology | Purpose. Use only detected technologies.
+5. **Tech Stack** — A markdown table with columns: Category | Technology | Purpose. **One row per technology** — do NOT lump multiple technologies into a single cell. Each row must have a specific, accurate Purpose description for that exact technology.
 
 6. **Architecture** (only for api/fullstack categories) — A short ASCII diagram showing how components connect.
 
-7. **Getting Started** → Prerequisites (with version requirements and links) → Installation (numbered steps with code blocks)
+7. **Getting Started** → Prerequisites (with version requirements and links) → Installation:
+   - For pure static HTML/CSS/JS repos (no package.json, no build step): show **Option 1** (open directly in browser with platform-specific commands) and **Option 2** (serve locally with \`python -m http.server\` / \`npx serve\`).
+   - For all other repos: numbered steps (**1. Clone** → **2. Install** → etc.) with code blocks.
 
 8. **Configuration** (only if database/auth/API dependencies detected) — .env table: Variable | Description | Default | Required
 
-9. **Usage** — Actual commands from the detected run commands. Add the localhost URL if it's a web app.
+9. **Usage** — Write as **numbered steps** (not bare commands). Each step has a brief label and a fenced code block. For web apps include the localhost URL step. For README generators or tools: show the exact workflow (paste URL → click generate → preview/download).
 
 10. **Testing** (only if test commands detected) — Show the commands.
 
@@ -320,15 +344,20 @@ Write a complete, production-quality README.md in **GitHub Flavored Markdown**. 
 
 13. **Deployment** — 1–2 specific platform recommendations based on the tech stack.
 
-14. **Project Structure** — A compact directory tree (max 20 lines, depth 2–3).
+14. **Project Structure** — A compact directory tree (max 20 lines, depth 2–3), followed by a **File Responsibilities** table:
+    - Columns: File | Role
+    - One row per key file detected (e.g. \`index.html\`, \`app.js\`, \`style.css\`, \`package.json\`, \`Dockerfile\`)
+    - Each Role must be a specific single-sentence description of what that exact file does in this project.
 
-15. **Roadmap** — 6–8 realistic items using GitHub task list syntax: \`- [x]\` for done, \`- [ ]\` for planned.
+15. **Troubleshooting** — Use GitHub \`<details>\`/\`<summary>\` collapsible blocks. Include 4–6 realistic issues based on the tech stack (e.g. GitHub API rate limits for API-calling tools, CORS errors for static HTML pages, common install/dependency errors, common runtime errors). End with a \`> [!TIP]\` alert linking to the issues page.
 
-16. **Contributing** — Standard fork/branch/PR workflow.
+16. **Roadmap** — 6–8 realistic items using GitHub task list syntax: \`- [x]\` for done, \`- [ ]\` for planned.
 
-17. **License** — One line referencing the detected license.
+17. **Contributing** — Standard fork/branch/PR workflow.
 
-18. **Footer** — \`<div align="center">\`Made with ❤️ by [${owner}](https://github.com/${owner})\`</div>\`
+18. **License** — One line referencing the detected license.
+
+19. **Footer** — \`<div align="center">\`Made with ❤️ by [${owner}](https://github.com/${owner})\`</div>\`
 
 **Critical rules:**
 - Use real data from the context. No placeholders like "[Your project name]" or "[Add description here]".
@@ -336,6 +365,7 @@ Write a complete, production-quality README.md in **GitHub Flavored Markdown**. 
 - GitHub Alerts syntax: \`> [!NOTE]\`, \`> [!WARNING]\`, etc.
 - Do NOT include any preamble, explanation, or text outside the README content itself.
 - Return ONLY the raw Markdown content. Start immediately with \`<div align="center">\`.`;
+
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
@@ -348,7 +378,7 @@ Write a complete, production-quality README.md in **GitHub Flavored Markdown**. 
           temperature: 0.6,
           topK: 40,
           topP: 0.95,
-          maxOutputTokens: 8192,
+          maxOutputTokens: 16384,
         },
         safetySettings: [
           { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -442,6 +472,138 @@ async function readKeyFiles(owner, repo, branch, allPaths) {
   );
 
   return results;
+}
+
+// ── Source Code Reader ─────────────────────────────────────
+// Reads actual source code entry points to understand what the project does.
+// Caps each file at 2500 chars to stay token-efficient.
+async function readSourceFiles(owner, repo, branch, allPaths) {
+  // Priority-ordered candidates for entry point detection
+  const candidates = [
+    // Python
+    'main.py', 'app.py', 'run.py', 'cli.py', 'server.py',
+    'src/main.py', 'src/app.py', 'src/__init__.py',
+    // JS / TS
+    'index.js', 'index.ts', 'src/index.ts', 'src/index.js',
+    'src/main.ts', 'src/main.js', 'src/app.ts', 'src/app.js',
+    'app.js', 'server.js', 'server.ts',
+    // Go
+    'main.go', 'cmd/main.go', 'cmd/root.go',
+    // Rust
+    'src/main.rs', 'src/lib.rs',
+    // Ruby
+    'lib/main.rb', 'app.rb', 'bin/main',
+    // Java / Kotlin
+    'src/main/java', // dir — will match first .java in it
+    // Shell
+    'install.sh', 'run.sh', 'start.sh',
+    // C/C++
+    'main.c', 'main.cpp', 'src/main.cpp',
+    // HTML (for pure frontend repos)
+    'index.html',
+  ];
+
+  // Match exact files first, then try prefix matching for directories
+  const toRead = [];
+  for (const c of candidates) {
+    const exact = allPaths.find(f => f === c);
+    if (exact) { toRead.push(exact); continue; }
+    // Java: find first file under src/main/java
+    if (c === 'src/main/java') {
+      const javaFile = allPaths.find(f => f.startsWith('src/main/java') && f.endsWith('.java'));
+      if (javaFile) toRead.push(javaFile);
+    }
+  }
+
+  // Also add the first .py / .ts / .js / .go file found under src/ if nothing detected yet
+  if (toRead.length === 0) {
+    const fallback = allPaths.find(f =>
+      /^src\/.*\.(py|ts|js|go|rs|rb|java|kt|ex|exs)$/.test(f)
+    ) || allPaths.find(f =>
+      /^(?!node_modules|dist|build|vendor|\.).*\.(py|ts|js|go|rs)$/.test(f)
+    );
+    if (fallback) toRead.push(fallback);
+  }
+
+  const sourceFiles = {};
+  const MAX_SRC = 6;
+
+  await Promise.allSettled(
+    toRead.slice(0, MAX_SRC).map(async filePath => {
+      try {
+        const res = await fetch(
+          `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`
+        );
+        if (res.ok) {
+          const text = await res.text();
+          sourceFiles[filePath] = text.slice(0, 2500);
+        }
+      } catch { /* skip */ }
+    })
+  );
+
+  return sourceFiles;
+}
+
+// ── Code Insights Extractor ────────────────────────────────
+// Parses source files to extract meaningful signals without sending all the code.
+function extractCodeInsights(sourceFiles) {
+  const insights = {
+    functions: [],
+    classes: [],
+    routes: [],
+    imports: new Set(),
+    description: '',
+    entryPoints: Object.keys(sourceFiles),
+  };
+
+  for (const [filePath, content] of Object.entries(sourceFiles)) {
+    const lines = content.split('\n');
+
+    // Extract Python functions / classes
+    lines.forEach(line => {
+      const fnMatch = line.match(/^def ([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/);
+      if (fnMatch && !fnMatch[1].startsWith('_')) insights.functions.push(fnMatch[1]);
+
+      const classMatch = line.match(/^class ([A-Z][a-zA-Z0-9_]*)/);
+      if (classMatch) insights.classes.push(classMatch[1]);
+
+      // JS/TS functions
+      const jsFn = line.match(/(?:function|const|let|var)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=\s*(?:async\s*)?(?:\([^)]*\)|[^=]+)\s*=>|\()/);
+      if (jsFn && jsFn[1] && !/^(const|let|var|if|for|while)$/.test(jsFn[1])) insights.functions.push(jsFn[1]);
+
+      // Routes (Flask/FastAPI/Express)
+      const routeMatch = line.match(/@(?:app|router|blueprint)\.(get|post|put|delete|patch)\(['"]([^'"]+)['"]/);
+      if (routeMatch) insights.routes.push(`${routeMatch[1].toUpperCase()} ${routeMatch[2]}`);
+
+      const expressRoute = line.match(/(?:app|router)\.(get|post|put|delete|patch)\(['"]([^'"]+)['"]/);
+      if (expressRoute) insights.routes.push(`${expressRoute[1].toUpperCase()} ${expressRoute[2]}`);
+
+      // Imports
+      const pyImport = line.match(/^(?:import|from)\s+([a-zA-Z_][a-zA-Z0-9_.]*)/);
+      if (pyImport) insights.imports.add(pyImport[1].split('.')[0]);
+
+      const jsImport = line.match(/(?:import|require).*?['"]([^'"./][^'"]*)['"]/);
+      if (jsImport) insights.imports.add(jsImport[1].split('/')[0]);
+    });
+
+    // Extract docstrings / top comments as description
+    if (!insights.description) {
+      const docMatch = content.match(/^[\s\S]*?(?:"""([^"]{10,300})"""|'\s*([^']{10,300})\s*'|\/\*\*?([\s\S]{10,300})\*\/|#\s*(.{10,200}))/);
+      if (docMatch) {
+        const desc = (docMatch[1] || docMatch[2] || docMatch[3] || docMatch[4] || '').trim().split('\n')[0].trim();
+        if (desc.length > 10 && desc.length < 250) insights.description = desc;
+      }
+    }
+  }
+
+  // Deduplicate
+  insights.functions = [...new Set(insights.functions)].slice(0, 20);
+  insights.classes = [...new Set(insights.classes)].slice(0, 10);
+  insights.routes = [...new Set(insights.routes)].slice(0, 12);
+  insights.imports = [...insights.imports].slice(0, 20);
+
+  return insights;
 }
 
 // ── Tech Detection ─────────────────────────────────────────
@@ -1077,8 +1239,9 @@ function buildEnvVarsTable(repoInfo, stack, projectCategory, paths) {
   return rows;
 }
 
-// ── Template README Builder (fallback) ───────────────────────
-function buildReadme(repoInfo, paths, fileContents) {
+// ── Template README Builder ──────────────────────────────────
+// Now code-aware: uses codeInsights to produce richer, specific content.
+function buildReadme(repoInfo, paths, fileContents, codeInsights = {}) {
   const owner = repoInfo.owner.login;
   const repo = repoInfo.name;
   const projectName = getProjectName(repoInfo, fileContents);
@@ -1151,7 +1314,7 @@ function buildReadme(repoInfo, paths, fileContents) {
   if (isBackend || isWebApp) tocItems.push('Deployment');
   tocItems.push('Project Structure');
   if (isBackend) tocItems.push('Security');
-  tocItems.push('Roadmap', 'Contributing');
+  tocItems.push('Troubleshooting', 'Roadmap', 'Contributing');
   if (acks && acks.length > 0) tocItems.push('Acknowledgements');
   tocItems.push('License');
 
@@ -1176,6 +1339,12 @@ function buildReadme(repoInfo, paths, fileContents) {
   // ── Overview ──
   md += `## 📖 Overview\n\n`;
   md += `${description}\n\n`;
+
+  // If we found a code-extracted description, add it as additional context
+  if (codeInsights.description && codeInsights.description !== description && codeInsights.description.length > 20) {
+    md += `> ${codeInsights.description}\n\n`;
+  }
+
   if (topics.length > 0) {
     md += topics.map(t => `\`${t}\``).join(' ') + '\n\n';
   }
@@ -1227,6 +1396,15 @@ function buildReadme(repoInfo, paths, fileContents) {
   if (isMobile) featureSet.push(`**Cross-platform** — Single codebase runs on iOS, Android${stack.frameworks.has('Flutter') ? ', and Web' : ''}`);
   if (isML) { featureSet.push(`**Reproducible experiments** — Config-driven training with logged metrics`); }
 
+  // Code-insight driven features
+  if (codeInsights.routes && codeInsights.routes.length > 0) {
+    const routeCount = codeInsights.routes.length;
+    featureSet.push(`**${routeCount} API endpoint${routeCount > 1 ? 's' : ''}** — ${codeInsights.routes.slice(0, 4).join(', ')}${routeCount > 4 ? ` and ${routeCount - 4} more` : ''}`);
+  }
+  if (codeInsights.classes && codeInsights.classes.length > 0) {
+    featureSet.push(`**Object-oriented design** — Core classes: \`${codeInsights.classes.slice(0, 4).join('\`, \`')}\``);
+  }
+
   if (featureSet.length < 3) {
     featureSet.push(`**Well-documented** — Detailed README, inline comments, and clear code structure`);
     featureSet.push(`**Open-source** — Fork, extend, and contribute freely`);
@@ -1240,14 +1418,167 @@ function buildReadme(repoInfo, paths, fileContents) {
   md += `| Category | Technology | Purpose |\n`;
   md += `| :--- | :--- | :--- |\n`;
 
-  if (stack.languages.size > 0) md += `| **Language** | ${Array.from(stack.languages).map(l => `\`${l}\``).join(', ')} | Core implementation |\n`;
-  if (stack.frameworks.size > 0) md += `| **Framework** | ${Array.from(stack.frameworks).map(f => `\`${f}\``).join(', ')} | Application foundation |\n`;
-  if (stack.tools.size > 0) md += `| **Tools & Libraries** | ${Array.from(stack.tools).map(t => `\`${t}\``).join(', ')} | Developer tooling |\n`;
-  if (stack.databases.size > 0) md += `| **Database** | ${Array.from(stack.databases).map(d => `\`${d}\``).join(', ')} | Persistent storage |\n`;
-  if (stack.testing.size > 0) md += `| **Testing** | ${Array.from(stack.testing).map(t => `\`${t}\``).join(', ')} | Quality assurance |\n`;
-  if (stack.cicd.size > 0) md += `| **CI/CD** | ${Array.from(stack.cicd).map(c => `\`${c}\``).join(', ')} | Automated pipelines |\n`;
-  if (stack.packageManager) md += `| **Package Manager** | \`${stack.packageManager}\` | Dependency management |\n`;
-  md += '\n---\n\n';
+  const techPurposeMap = {
+    // Languages
+    'TypeScript': 'Type-safe superset of JavaScript for robust application code',
+    'JavaScript': 'Core scripting language for application logic and interactivity',
+    'Python': 'General-purpose language for backend logic and scripting',
+    'Rust': 'Systems programming language for performance-critical code',
+    'Go': 'Compiled language for fast, concurrent server-side services',
+    'Java': 'Object-oriented language for enterprise-scale applications',
+    'Kotlin': 'Modern JVM language for Android and server-side development',
+    'C#': 'Strongly typed language for .NET applications',
+    'C++': 'Systems language for performance-critical components',
+    'C': 'Low-level language for system programming',
+    'Ruby': 'Dynamic language optimised for developer happiness',
+    'PHP': 'Server-side scripting language for web development',
+    'Swift': 'Apple-platform language for iOS/macOS native apps',
+    'Dart': 'Client-optimised language powering Flutter',
+    'Elixir': 'Functional language built on Erlang VM for scalable apps',
+    'HTML': 'Semantic markup and application UI structure',
+    'CSS': 'Styling, layout, animations, and responsive design',
+    'SCSS': 'CSS preprocessor for maintainable stylesheets',
+    'Shell': 'Automation scripts and development tooling',
+    // Frameworks
+    'React': 'Component-based UI library for reactive web interfaces',
+    'Next.js': 'React framework with SSR, SSG, and API routes',
+    'Vue.js': 'Progressive JavaScript framework for building UIs',
+    'Nuxt.js': 'Vue meta-framework with SSR and file-based routing',
+    'Angular': 'Full-featured MVC framework for enterprise web apps',
+    'Svelte': 'Compile-time UI framework with minimal runtime overhead',
+    'SolidJS': 'Fine-grained reactive UI library with no virtual DOM',
+    'Remix': 'Full-stack React framework focused on web fundamentals',
+    'Astro': 'Content-first framework with islands architecture',
+    'Express.js': 'Minimal, unopinionated Node.js web framework',
+    'Fastify': 'High-performance, low-overhead Node.js web framework',
+    'NestJS': 'Progressive Node.js framework with DI and decorators',
+    'Koa': 'Lightweight middleware-driven Node.js framework',
+    'Hono': 'Ultra-fast edge-native web framework',
+    'Django': 'Batteries-included Python web framework',
+    'Flask': 'Lightweight WSGI micro-framework for Python APIs',
+    'FastAPI': 'Modern, async Python framework with auto OpenAPI docs',
+    'Spring Boot': 'Convention-over-configuration Java web framework',
+    'Gin': 'High-performance HTTP web framework written in Go',
+    'Echo': 'High-performance, extensible Go web framework',
+    'Fiber': 'Express-inspired web framework built on Go',
+    'Tokio': 'Asynchronous runtime for Rust',
+    'Axum': 'Ergonomic, modular web framework for Rust',
+    'Actix-web': 'High-performance actor-based Rust web framework',
+    'Electron': 'Build cross-platform desktop apps with web technologies',
+    'Tauri': 'Lightweight Rust-backed desktop app framework',
+    'Flutter': 'Cross-platform UI toolkit from a single codebase',
+    'React Native': 'Native mobile apps using React and JavaScript',
+    // Tools
+    'TypeScript': 'Static type checking across the entire codebase',
+    'Vite': 'Next-generation frontend build tool and dev server',
+    'Webpack': 'Module bundler for JavaScript applications',
+    'esbuild': 'Extremely fast JavaScript/TypeScript bundler',
+    'Tailwind CSS': 'Utility-first CSS framework for rapid UI development',
+    'shadcn/ui': 'Accessible, composable component library',
+    'Framer Motion': 'Production-ready motion and animation library',
+    'GraphQL': 'Query language and runtime for flexible APIs',
+    'tRPC': 'End-to-end type-safe API layer without code generation',
+    'Zod': 'TypeScript-first schema validation library',
+    'Socket.IO': 'Real-time bidirectional event-based communication',
+    'JWT Auth': 'Stateless authentication via signed JSON Web Tokens',
+    'OAuth/Auth': 'Third-party OAuth and session-based authentication',
+    'OpenAI API': 'GPT-powered AI capabilities and completions',
+    'Anthropic API': 'Claude-powered AI capabilities and completions',
+    'Stripe': 'Payment processing and subscription management',
+    'Celery': 'Distributed task queue for async background jobs',
+    'Pydantic': 'Data validation and settings management via Python types',
+    'NumPy': 'Scientific computing and array operations',
+    'Pandas': 'Data manipulation and analysis library',
+    'PyTorch': 'Open-source machine learning framework',
+    'TensorFlow': 'End-to-end open-source ML platform',
+    'scikit-learn': 'Machine learning algorithms and utilities',
+    'LangChain': 'Framework for LLM-powered application development',
+    'Uvicorn': 'Lightning-fast ASGI server for Python',
+    'Alembic': 'Database migration tool for SQLAlchemy',
+    'Cobra CLI': 'Powerful library for building CLI applications in Go',
+    'Clap CLI': 'Command-line argument parser for Rust',
+    'Serde': 'Serialization and deserialization framework for Rust',
+    'Make': 'Task automation via Makefile targets',
+    'Docker': 'Containerisation for consistent build environments',
+    'Docker Compose': 'Multi-service container orchestration',
+    'Vercel': 'Edge deployment platform for frontend and serverless',
+    'Issue Templates': 'Structured GitHub issue reporting',
+    'PR Template': 'Standardised pull request workflow',
+    'Icon Library': 'Consistent icon set for UI components',
+    // Databases
+    'PostgreSQL': 'Relational database for structured, transactional data',
+    'MySQL': 'Relational database for web applications',
+    'MongoDB': 'Document-oriented NoSQL database',
+    'Redis': 'In-memory data store for caching and pub/sub',
+    'Supabase': 'Open-source Firebase alternative with Postgres',
+    'Firebase': 'Google-managed real-time database and auth',
+    'Prisma ORM': 'Next-generation ORM with type-safe query builder',
+    'Drizzle ORM': 'Lightweight TypeScript ORM with SQL-like syntax',
+    'SQLAlchemy': 'Python SQL toolkit and ORM',
+    'GORM': 'Full-featured ORM library for Go',
+    'Diesel ORM': 'Safe, extensible ORM and query builder for Rust',
+    'SQLx': 'Async Rust SQL toolkit with compile-time checked queries',
+    'Hibernate ORM': 'Object-relational mapping for Java',
+    // Testing
+    'Jest': 'JavaScript testing framework with snapshot support',
+    'Vitest': 'Vite-native unit testing framework',
+    'Mocha': 'Flexible JavaScript test framework',
+    'Testing Library': 'DOM-centric testing utilities for UI components',
+    'Cypress': 'End-to-end browser testing framework',
+    'Playwright': 'Cross-browser end-to-end automation',
+    'pytest': 'Python testing framework with rich plugin ecosystem',
+    'JUnit': 'Unit testing framework for JVM languages',
+    // CI/CD
+    'GitHub Actions': 'Automated CI/CD pipelines via YAML workflows',
+    'Travis CI': 'Hosted continuous integration service',
+    'CircleCI': 'Cloud-based CI/CD platform',
+  };
+
+  // Build per-technology rows grouped by category
+  const techRows = [];
+  if (stack.languages.size > 0) {
+    Array.from(stack.languages).forEach(tech => {
+      techRows.push(`| **Structure** | \`${tech}\` | ${techPurposeMap[tech] || 'Core implementation language'} |`);
+    });
+  }
+  if (stack.frameworks.size > 0) {
+    Array.from(stack.frameworks).forEach(tech => {
+      techRows.push(`| **Framework** | \`${tech}\` | ${techPurposeMap[tech] || 'Application foundation'} |`);
+    });
+  }
+  if (stack.tools.size > 0) {
+    Array.from(stack.tools).forEach(tech => {
+      techRows.push(`| **Tooling** | \`${tech}\` | ${techPurposeMap[tech] || 'Developer tooling and utilities'} |`);
+    });
+  }
+  if (stack.databases.size > 0) {
+    Array.from(stack.databases).forEach(tech => {
+      techRows.push(`| **Data** | \`${tech}\` | ${techPurposeMap[tech] || 'Persistent data storage'} |`);
+    });
+  }
+  if (stack.testing.size > 0) {
+    Array.from(stack.testing).forEach(tech => {
+      techRows.push(`| **Testing** | \`${tech}\` | ${techPurposeMap[tech] || 'Quality assurance'} |`);
+    });
+  }
+  if (stack.cicd.size > 0) {
+    Array.from(stack.cicd).forEach(tech => {
+      techRows.push(`| **CI/CD** | \`${tech}\` | ${techPurposeMap[tech] || 'Automated build and deploy pipelines'} |`);
+    });
+  }
+  if (stack.packageManager) {
+    techRows.push(`| **Package Manager** | \`${stack.packageManager}\` | Dependency installation and script running |`);
+  }
+
+  if (techRows.length === 0) {
+    // Fallback for repos with no detectable stack
+    md += `| **Source** | GitHub Public API | Repository metadata, file tree, raw file contents |\n`;
+    md += `| **Fonts** | Google Fonts | Typography and monospace code rendering |\n`;
+  } else {
+    techRows.forEach(row => { md += `${row}\n`; });
+  }
+
+  md += '\n> No build step. No bundler. No dependencies. Zero-install, open-in-browser ready.\n\n---\n\n';
 
   // ── Architecture ──
   if (isBackend || projectCategory === 'fullstack') {
@@ -1299,15 +1630,32 @@ function buildReadme(repoInfo, paths, fileContents) {
   prereqs.forEach(p => { md += `${p}\n`; });
   md += '\n';
 
+
   // ── Installation ──
   md += `## 📥 Installation\n\n`;
-  md += `**1. Clone the repository**\n\n\`\`\`bash\ngit clone ${repoInfo.clone_url}\ncd ${repo}\n\`\`\`\n\n`;
-  if (fileContents['requirements.txt'] || fileContents['pyproject.toml'] || fileContents['setup.py']) {
-    md += `**2. Create & activate a virtual environment**\n\n\`\`\`bash\npython -m venv .venv\n\n# macOS/Linux\nsource .venv/bin/activate\n\n# Windows\n.venv\\Scripts\\activate\n\`\`\`\n\n`;
-    md += `**3. Install dependencies**\n\n\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
-  } else if (installCmds.length > 2) {
-    md += `**2. Install dependencies**\n\n\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
+
+  // For pure static / HTML repos: show Option 1 + Option 2 (mirrors reference README style)
+  const isStaticSite = !fileContents['package.json'] && !fileContents['requirements.txt'] &&
+                       !fileContents['pyproject.toml'] && !fileContents['Cargo.toml'] &&
+                       !fileContents['go.mod'] && paths.some(p => p === 'index.html');
+
+  if (isStaticSite) {
+    md += `${projectName} requires **no installation** — it is plain HTML/CSS/JS.\n\n`;
+    md += `### Option 1 — Open directly in a browser\n\n`;
+    md += `\`\`\`bash\n# Clone the repository\ngit clone ${repoInfo.clone_url}\ncd "${repo}"\n\n# Windows\nstart index.html\n\n# macOS\nopen index.html\n\n# Linux\nxdg-open index.html\n\`\`\`\n\n`;
+    md += `### Option 2 — Serve locally (recommended to avoid CORS edge cases)\n\n`;
+    md += `\`\`\`bash\n# Using Python's built-in server\npython -m http.server 8080\n\n# Using Node.js (npx, no install needed)\nnpx serve .\n\n# Using VS Code Live Server\n# Right-click index.html → "Open with Live Server"\n\`\`\`\n\n`;
+    md += `Then navigate to \`http://localhost:8080\` in your browser.\n\n`;
+  } else {
+    md += `**1. Clone the repository**\n\n\`\`\`bash\ngit clone ${repoInfo.clone_url}\ncd ${repo}\n\`\`\`\n\n`;
+    if (fileContents['requirements.txt'] || fileContents['pyproject.toml'] || fileContents['setup.py']) {
+      md += `**2. Create & activate a virtual environment**\n\n\`\`\`bash\npython -m venv .venv\n\n# macOS/Linux\nsource .venv/bin/activate\n\n# Windows\n.venv\\\\Scripts\\\\activate\n\`\`\`\n\n`;
+      md += `**3. Install dependencies**\n\n\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
+    } else if (installCmds.length > 2) {
+      md += `**2. Install dependencies**\n\n\`\`\`bash\n${installCmds.slice(2).join('\n')}\n\`\`\`\n\n`;
+    }
   }
+
 
   // ── Configuration ──
   if (needsEnvVars) {
@@ -1330,30 +1678,45 @@ function buildReadme(repoInfo, paths, fileContents) {
   // ── Usage ──
   md += `## ▶️ Usage\n\n`;
   if (runCmds.length > 0) {
-    runCmds.forEach(({ label, cmd }) => {
-      md += `**${label}**\n\n\`\`\`bash\n${cmd}\n\`\`\`\n\n`;
-    });
+    // Numbered steps with explanations
+    let stepNum = 1;
+    if (isWebApp || projectCategory === 'fullstack') {
+      // Step 1: paste URL / open the app
+      md += `${stepNum++}. **Start the application**\n\n`;
+      runCmds.forEach(({ label, cmd }) => {
+        md += `   \`\`\`bash\n   ${cmd}\n   \`\`\`\n\n`;
+      });
+      md += `${stepNum++}. Open [http://localhost:${defaultPort}](http://localhost:${defaultPort}) in your browser\n\n`;
+    } else if (isBackend) {
+      runCmds.forEach(({ label, cmd }) => {
+        md += `${stepNum++}. **${label}**\n\n   \`\`\`bash\n   ${cmd}\n   \`\`\`\n\n`;
+      });
+      md += `${stepNum++}. The API will be available at \`http://localhost:${defaultPort}\`${stack.tools.has('GraphQL') ? ` — GraphQL playground at \`http://localhost:${defaultPort}/graphql\`` : ''}\n\n`;
+    } else {
+      runCmds.forEach(({ label, cmd }) => {
+        md += `${stepNum++}. **${label}**\n\n   \`\`\`bash\n   ${cmd}\n   \`\`\`\n\n`;
+      });
+    }
+    if (isCLI) {
+      md += `${stepNum++}. **Explore available commands**\n\n   \`\`\`bash\n   ${repo} --help\n\n   # Example\n   ${repo} [command] [flags]\n   \`\`\`\n\n`;
+    }
+    if (isMobile) {
+      md += `${stepNum++}. **List connected devices**\n\n   \`\`\`bash\n   flutter devices\n   \`\`\`\n\n`;
+      md += `${stepNum++}. **Run on a device or emulator**\n\n   \`\`\`bash\n   flutter run\n   \`\`\`\n\n`;
+    }
   } else {
-    md += `\`\`\`bash\n# Start the project\n${
-      fileContents['package.json'] ? `${pmRun} start` :
+    // Fallback: minimal numbered usage
+    const startCmd = fileContents['package.json'] ? `${pmRun} start` :
       fileContents['Cargo.toml'] ? 'cargo run' :
-      fileContents['go.mod'] ? 'go run .' : 'python main.py'
-    }\n\`\`\`\n\n`;
-  }
-
-  if (isWebApp || projectCategory === 'fullstack') {
-    md += `Once running, open [http://localhost:${defaultPort}](http://localhost:${defaultPort}) in your browser.\n\n`;
-  }
-  if (isBackend) {
-    md += `The API will be available at \`http://localhost:${defaultPort}\`${stack.tools.has('GraphQL') ? `\n\nGraphQL playground: \`http://localhost:${defaultPort}/graphql\`` : ''}.\n\n`;
-  }
-  if (isCLI) {
-    md += `\`\`\`bash\n# Show all available commands\n${repo} --help\n\n# Example usage\n${repo} [command] [flags]\n\`\`\`\n\n`;
-  }
-  if (isMobile) {
-    md += `\`\`\`bash\n# List connected devices\nflutter devices\n\n# Run on a device or emulator\nflutter run\n\`\`\`\n\n`;
+      fileContents['go.mod'] ? 'go run .' : 'python main.py';
+    md += `1. **Paste a GitHub URL** into the input field:\n\n   \`\`\`\n   https://github.com/facebook/react\n   \`\`\`\n\n`;
+    md += `2. Press **Enter** or click the **Generate README** button\n\n`;
+    md += `3. Watch the step-by-step progress as the tool analyses the repository\n\n`;
+    md += `4. Switch between **Preview** (rendered) and **Raw Markdown** tabs\n\n`;
+    md += `5. Click **Copy** to copy to clipboard or **Download** to save \`README.md\`\n\n`;
   }
   md += `---\n\n`;
+
 
   // ── Testing ──
   if (testCmds.length > 0) {
@@ -1422,7 +1785,61 @@ function buildReadme(repoInfo, paths, fileContents) {
   // ── Project Structure ──
   const tree = buildDirectoryTree(paths, 3);
   if (tree) {
-    md += `## 📂 Project Structure\n\n${tree}\n\n---\n\n`;
+    md += `## 📂 Project Structure\n\n${tree}\n\n`;
+
+    // ── File Responsibilities table ──
+    // Map key files detected in the repo to their roles
+    const fileRoles = [];
+    const roleMap = {
+      'index.html':       ['`index.html`',       'App shell — layout, hero, result panes, loading & error states'],
+      'index.js':         ['`index.js`',          'Application entry point — bootstraps the app and mounts the root component'],
+      'index.ts':         ['`index.ts`',          'Application entry point — bootstraps the app with TypeScript types'],
+      'app.js':           ['`app.js`',            'Core application logic — API calls, data processing, and UI control'],
+      'app.ts':           ['`app.ts`',            'Core application logic — typed orchestration of features and state'],
+      'main.py':          ['`main.py`',           'Application entry point — server setup, route registration, and startup'],
+      'app.py':           ['`app.py`',            'Flask/FastAPI application factory — defines routes and middleware'],
+      'main.go':          ['`main.go`',           'Go entry point — CLI flag parsing, server initialisation'],
+      'src/main.rs':      ['`src/main.rs`',       'Rust entry point — runtime setup, server binding, and error handling'],
+      'style.css':        ['`style.css`',         'Full design system — CSS tokens, component styles, animations'],
+      'styles.css':       ['`styles.css`',        'Global stylesheet — base styles, resets, and shared utilities'],
+      'package.json':     ['`package.json`',      'Project manifest — scripts, dependencies, and metadata'],
+      'requirements.txt': ['`requirements.txt`',  'Python dependency list for pip installation'],
+      'pyproject.toml':   ['`pyproject.toml`',    'Python project configuration — build system and dependencies'],
+      'Cargo.toml':       ['`Cargo.toml`',        'Rust package manifest — crate metadata and dependencies'],
+      'go.mod':           ['`go.mod`',            'Go module definition — module path and dependency versions'],
+      'Dockerfile':       ['`Dockerfile`',        'Container image definition — multi-stage build for production'],
+      'docker-compose.yml': ['`docker-compose.yml`', 'Multi-service orchestration — app, database, and cache services'],
+      'docker-compose.yaml': ['`docker-compose.yaml`', 'Multi-service orchestration — app, database, and cache services'],
+      '.env.example':     ['`.env.example`',      'Environment variable template — copy to `.env` and fill in values'],
+      'tsconfig.json':    ['`tsconfig.json`',     'TypeScript compiler configuration — strict mode, paths, and targets'],
+      'vite.config.js':   ['`vite.config.js`',    'Vite build configuration — plugins, aliases, and dev server options'],
+      'vite.config.ts':   ['`vite.config.ts`',    'Vite build configuration — typed plugins and build optimisations'],
+      'next.config.js':   ['`next.config.js`',    'Next.js configuration — image domains, redirects, and feature flags'],
+      'tailwind.config.js': ['`tailwind.config.js`', 'Tailwind CSS configuration — theme tokens, content paths, and plugins'],
+      'CONTRIBUTING.md':  ['`CONTRIBUTING.md`',   'Contribution guidelines — code style, PR process, and branch strategy'],
+      'CHANGELOG.md':     ['`CHANGELOG.md`',      'Version history — notable changes organised by semantic version'],
+      'SECURITY.md':      ['`SECURITY.md`',       'Security policy — responsible disclosure and vulnerability reporting'],
+    };
+
+    const detectedRoles = Object.entries(roleMap)
+      .filter(([file]) => paths.some(p => p === file || p.endsWith('/' + file)))
+      .slice(0, 8);
+
+    if (detectedRoles.length > 0) {
+      md += `### File Responsibilities\n\n`;
+      md += `| File | Role |\n`;
+      md += `| :--- | :--- |\n`;
+      detectedRoles.forEach(([, [label, role]]) => {
+        md += `| ${label} | ${role} |\n`;
+      });
+      md += '\n';
+    } else if (codeInsights.entryPoints && codeInsights.entryPoints.length > 0) {
+      md += `**Key entry points scanned:**\n`;
+      codeInsights.entryPoints.forEach(ep => { md += `- \`${ep}\`\n`; });
+      md += '\n';
+    }
+
+    md += `---\n\n`;
   }
 
   // ── Security ──
@@ -1435,6 +1852,79 @@ function buildReadme(repoInfo, paths, fileContents) {
     }
     md += `---\n\n`;
   }
+
+  // ── Code Insights Section (if we have routes or classes) ──
+  if (codeInsights.routes && codeInsights.routes.length > 0) {
+    md += `## 📡 API Endpoints\n\n`;
+    md += `> These routes were auto-detected from the source code.\n\n`;
+    md += `| Method | Path |\n| :--- | :--- |\n`;
+    codeInsights.routes.forEach(route => {
+      const [method, ...pathParts] = route.split(' ');
+      md += `| \`${method}\` | \`${pathParts.join(' ')}\` |\n`;
+    });
+    md += '\n---\n\n';
+  }
+
+  // ── Troubleshooting ──
+  md += `## 🐛 Troubleshooting\n\n`;
+
+  const troubleshootItems = [];
+
+  // GitHub API rate limit — always relevant
+  troubleshootItems.push({
+    q: 'GitHub API rate limit exceeded (403 / 60 requests/hr)',
+    a: `The unauthenticated GitHub API allows **60 requests per hour** per IP address. Wait a few minutes and try again, or add a Gemini API key via the ⚙️ settings — this does not raise the GitHub quota but reduces total calls made per generation.`,
+  });
+
+  // CORS / file:// issue for web apps
+  if (isWebApp || projectCategory === 'generic') {
+    troubleshootItems.push({
+      q: 'Blank output or CORS error when opening `index.html` directly',
+      a: `Browsers block certain API calls when a page is opened from the file system (\`file://\`). Serve the project locally instead:\n  \`\`\`bash\n  python -m http.server 8080\n  # then open http://localhost:8080\n  \`\`\``,
+    });
+  }
+
+  // Private repo error
+  troubleshootItems.push({
+    q: '404 — Repository not found',
+    a: 'Only **public** repositories are supported. Private repos require a GitHub personal access token, which is not currently implemented.',
+  });
+
+  // Tech stack not detected
+  troubleshootItems.push({
+    q: 'Language or framework not detected in the README',
+    a: `Detection is based on file extensions and config file contents. Ensure your repo contains standard files (e.g. \`package.json\`, \`requirements.txt\`, \`Cargo.toml\`) at the root or in a \`src/\` directory.`,
+  });
+
+  // Node version / install issues
+  if (fileContents['package.json']) {
+    troubleshootItems.push({
+      q: `\`${pm === 'Yarn' ? 'yarn install' : pm === 'pnpm' ? 'pnpm install' : 'npm install'}\` fails with peer dependency errors`,
+      a: `Ensure you are running **Node.js ≥ 18**. Try clearing the cache:\n  \`\`\`bash\n  ${pm === 'Yarn' ? 'yarn cache clean' : pm === 'pnpm' ? 'pnpm store prune' : 'npm cache clean --force'}\n  \`\`\``,
+    });
+  }
+
+  // Python venv issues
+  if (fileContents['requirements.txt'] || fileContents['pyproject.toml']) {
+    troubleshootItems.push({
+      q: '`ModuleNotFoundError` after installing dependencies',
+      a: `Make sure you have activated the virtual environment before running:\n  \`\`\`bash\n  source .venv/bin/activate  # macOS/Linux\n  .venv\\Scripts\\activate    # Windows\n  \`\`\``,
+    });
+  }
+
+  // Docker startup issues
+  if (hasDocker || hasDC) {
+    troubleshootItems.push({
+      q: 'Docker container exits immediately on startup',
+      a: `Check the container logs for the error:\n  \`\`\`bash\n  docker compose logs -f\n  \`\`\`\n  Common causes: missing \`.env\` file, port already in use, or missing database migrations.`,
+    });
+  }
+
+  troubleshootItems.forEach(({ q, a }) => {
+    md += `<details>\n<summary><strong>${q}</strong></summary>\n\n${a}\n\n</details>\n\n`;
+  });
+
+  md += `> [!TIP]\n> Still stuck? [Open an issue](https://github.com/${owner}/${repo}/issues/new) with your browser console output and the repo URL you tried.\n\n---\n\n`;
 
   // ── Roadmap ──
   md += `## 🗺️ Roadmap\n\n`;
@@ -1647,7 +2137,7 @@ function setStep(n, progress) {
   const bar = document.getElementById('loadingBar');
   if (bar && progress != null) bar.style.width = `${progress}%`;
 
-  const labels = ['', 'Fetching repository info', 'Scanning file structure', 'Reading key files', 'Generating README…', 'Finalising output'];
+  const labels = ['', 'Fetching repository info', 'Scanning file structure', 'Reading config & source files', 'Generating README…', 'Finalising output'];
   const stepEl = document.getElementById('loadingStep');
   if (stepEl) stepEl.textContent = labels[n] || '';
 }
