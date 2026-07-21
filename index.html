@@ -20,6 +20,12 @@
 </head>
 <body>
 
+  <!-- ── Notification Toast ── -->
+  <div id="notificationToast" style="position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:1000; padding:10px 20px; background:rgba(239, 68, 68, 0.15); border:1px solid rgba(239, 68, 68, 0.3); border-radius:8px; color:#fca5a5; display:flex; align-items:center; gap:10px; box-shadow:0 16px 48px rgba(0,0,0,0.6); font-size:0.83rem; font-family:sans-serif; visibility:hidden; opacity:0; transition:visibility 0s, opacity 0.2s linear;" role="alert">
+    <span id="notificationMessage"></span>
+    <button onclick="dismissNotification()" style="background:none; border:none; color:inherit; cursor:pointer; font-weight:bold; font-size:1rem; padding:0 4px; margin-left:10px;">✕</button>
+  </div>
+
   <!-- ── Header ── -->
   <header class="header">
     <div class="logo">
@@ -62,7 +68,7 @@
       <button class="settings-close" onclick="toggleSettings()" aria-label="Close settings">✕</button>
     </div>
     <p class="settings-desc">
-      ReadmeForge uses <strong>Google Gemini Flash</strong> to intelligently analyze your repository and write a professional README.<br><br>
+      ReadmeForge uses <strong>Google Gemini Pro</strong> to intelligently analyze your repository and write a professional README.<br><br>
       Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com</a> — no billing required.
       Your key is stored only in your browser's localStorage and never sent to any server.
     </p>
@@ -78,6 +84,13 @@
         aria-label="Gemini API Key"
       />
       <button class="save-key-btn" onclick="saveApiKey()" aria-label="Save API Key">Save</button>
+    </div>
+    <label class="settings-field-label" for="modelSelect">Gemini Model</label>
+    <div class="settings-input-row" style="margin-bottom: 1.25rem;">
+      <select id="modelSelect" class="api-key-input" onchange="saveModel()" style="width: 100%; cursor: pointer; background: var(--bg); border: 1px solid var(--border); color: var(--text-primary); font-family: var(--font-sans); padding: 0.5rem 0.75rem; border-radius: var(--radius-xs); outline: none;">
+        <option value="gemini-1.5-flash">Gemini 1.5 Flash (Fast, Stable)</option>
+        <option value="gemini-1.5-pro">Gemini 1.5 Pro (Detailed, Smart)</option>
+      </select>
     </div>
     <div id="keyStatus" class="settings-status">No key configured — will use template mode</div>
   </div>
